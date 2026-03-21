@@ -529,9 +529,8 @@
     </div>
 
     <div id="status-bar">
-      <button class="status-pill highlight" id="mode-btn" onclick="toggleMode()" style="cursor:pointer;font-family:'DM Mono',monospace;letter-spacing:0.06em;background:rgba(200,169,110,0.15);border-color:rgba(200,169,110,0.5);color:var(--accent);">▯ PORTRAIT</button>
+      <div class="status-pill highlight" id="orient-pill">PORTRAIT</div>
       <div class="status-pill" id="cam-pill">FRONT</div>
-      <div class="status-pill" id="debug-pill" style="color:#6ec88a;border-color:rgba(110,200,138,0.3);">...</div>
     </div>
 
     <div id="prompter-controls">
@@ -739,9 +738,7 @@ const state = {
   scrollInterval: null,
   scrollPos: 0,
   isScrolling: false,
-  autoScrollWithRec: true,
   currentFacing: 'user',
-  recordingMode: 'portrait', // 'portrait' or 'landscape'
   position: 'top-center',
   fontSize: 24,
   boxW: 70,
@@ -753,7 +750,6 @@ const state = {
   audioEnabled: true,
   selectedCameraId: null,
   selectedMicId: null,
-  drawings: null,
   drawInterval: null,
   recordings: [],
 };
@@ -775,14 +771,8 @@ async function initCamera() {
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
     state.stream = stream;
     const vid = document.getElementById('camera-video');
-    // Mirror front camera so it feels natural (like a mirror)
     vid.style.transform = state.currentFacing === 'user' ? 'scaleX(-1)' : '';
     vid.srcObject = stream;
-    // Once metadata loads, show actual sensor dimensions for debugging
-    vid.onloadedmetadata = () => {
-      const dp = document.getElementById('debug-pill');
-      if (dp) dp.textContent = `${vid.videoWidth}×${vid.videoHeight} angle:${screen.orientation ? screen.orientation.angle : '?'}`;
-    };
     await populateDevices();
     updateCamPill();
   } catch (e) {
@@ -886,60 +876,65 @@ function startRecording() {
   state.recordedChunks = [];
 
   const vid = document.getElementById('camera-video');
+  const isFront = state.currentFacing === 'user';
 
-  // Get actual sensor dimensions — these are always the raw sensor values
-  // regardless of how the phone is held. On iPhone 13 this will be 1280×960
-  // or 1920×1080 etc., always landscape (width >= height).
-  const sensorW = vid.videoWidth || 1280;
-  const sensorH = vid.videoHeight || 720;
-
-  // Get the current device orientation angle
+  // Sensor delivers 480×640 in portrait (width < height).
+  // In landscape the sensor may still report 480×640 or flip to 640×480 —
+  // we read actual values and use orientation angle to decide what to do.
+  const sensorW = vid.videoWidth  || 480;
+  const sensorH = vid.videoHeight || 640;
   const angle = (screen.orientation && screen.orientation.angle !== undefined)
     ? screen.orientation.angle : 0;
 
-  const isFront = state.currentFacing === 'user';
-  const isPortraitMode = state.recordingMode === 'portrait';
+  // angle=0   → portrait  (phone upright)
+  // angle=90  → landscape rotated CCW
+  // angle=270 → landscape rotated CW  (confirmed on your device)
+  // angle=180 → upside-down portrait
+  const isLandscape = (angle === 90 || angle === 270);
 
-  // Determine canvas output size
-  // Portrait: tall output (swap sensor dims)
-  // Landscape: wide output (use sensor dims as-is)
-  let canvasW, canvasH;
-  if (isPortraitMode) {
-    canvasW = sensorH;
-    canvasH = sensorW;
+  let canvasW, canvasH, rotateDeg;
+
+  if (!isLandscape) {
+    // Portrait: sensor is already portrait (480×640), draw straight
+    canvasW = sensorW;   // 480
+    canvasH = sensorH;   // 640
+    rotateDeg = 0;
   } else {
-    canvasW = sensorW;
-    canvasH = sensorH;
+    // Landscape: we want a wide output (640×480).
+    // If sensor still reports 480×640 we rotate 90° to produce 640×480.
+    // If sensor already flipped to 640×480 we draw straight.
+    if (sensorW < sensorH) {
+      // Sensor is still portrait-shaped, rotate to landscape
+      canvasW = sensorH;  // 640
+      canvasH = sensorW;  // 480
+      rotateDeg = angle === 270 ? 90 : -90;
+    } else {
+      // Sensor already landscape
+      canvasW = sensorW;
+      canvasH = sensorH;
+      rotateDeg = 0;
+    }
   }
 
   const canvas = document.createElement('canvas');
-  canvas.width = canvasW;
+  canvas.width  = canvasW;
   canvas.height = canvasH;
   const ctx = canvas.getContext('2d');
-
-  // Update debug pill with what we're actually recording
-  const dp = document.getElementById('debug-pill');
-  if (dp) dp.textContent = `REC ${canvasW}×${canvasH} a:${angle}`;
 
   state.drawInterval = setInterval(() => {
     if (vid.readyState < 2) return;
     ctx.save();
     ctx.clearRect(0, 0, canvasW, canvasH);
-
-    if (isPortraitMode) {
-      // We want a portrait (tall) output from a landscape sensor stream.
-      // Move to canvas center, rotate 90° CCW, mirror if front camera.
-      ctx.translate(canvasW / 2, canvasH / 2);
-      ctx.rotate(-Math.PI / 2);  // CCW rotation
-      if (isFront) ctx.scale(-1, 1);  // mirror front cam
-      ctx.drawImage(vid, -sensorW / 2, -sensorH / 2, sensorW, sensorH);
+    ctx.translate(canvasW / 2, canvasH / 2);
+    if (rotateDeg) ctx.rotate(rotateDeg * Math.PI / 180);
+    // Mirror front camera so saved video matches what user saw
+    if (isFront) ctx.scale(-1, 1);
+    // After rotation the draw dimensions swap if rotated
+    if (rotateDeg === 90 || rotateDeg === -90) {
+      ctx.drawImage(vid, -sensorH / 2, -sensorW / 2, sensorH, sensorW);
     } else {
-      // Landscape: draw straight, mirror if front cam
-      ctx.translate(canvasW / 2, canvasH / 2);
-      if (isFront) ctx.scale(-1, 1);
       ctx.drawImage(vid, -sensorW / 2, -sensorH / 2, sensorW, sensorH);
     }
-
     ctx.restore();
   }, 1000 / 30);
 
@@ -953,7 +948,6 @@ function startRecording() {
   for (const m of mimeTypes) {
     if (MediaRecorder.isTypeSupported(m)) { chosenMime = m; break; }
   }
-
   state.mediaRecorder = chosenMime
     ? new MediaRecorder(canvasStream, { mimeType: chosenMime })
     : new MediaRecorder(canvasStream);
@@ -1187,24 +1181,17 @@ function applyTextTransform() {
   el.style.transform = transforms.length ? transforms.join(' ') : '';
 }
 
-function toggleMode() {
-  state.recordingMode = state.recordingMode === 'portrait' ? 'landscape' : 'portrait';
-  const btn = document.getElementById('mode-btn');
-  if (state.recordingMode === 'portrait') {
-    btn.textContent = '▯ PORTRAIT';
-    // Auto-reset text rotation for portrait
-    state.textRotation = 0;
-  } else {
-    btn.textContent = '▭ LANDSCAPE';
-    // Auto-rotate text 90° CW so it reads correctly when phone is sideways
-    state.textRotation = 90;
-  }
-  applyTextTransform();
+// ─── ORIENTATION ─────────────────────────────────────
+function updateOrientPill() {
+  const angle = screen.orientation ? screen.orientation.angle : 0;
+  const isLandscape = (angle === 90 || angle === 270);
+  const pill = document.getElementById('orient-pill');
+  if (pill) pill.textContent = isLandscape ? 'LANDSCAPE' : 'PORTRAIT';
+  applyPosition();
 }
-
-
-
-function updateCountdown(v) {
+screen.orientation && screen.orientation.addEventListener('change', () => setTimeout(updateOrientPill, 100));
+window.addEventListener('resize', () => setTimeout(updateOrientPill, 100));
+updateOrientPill();
   state.countdownVal = +v;
   document.getElementById('val-countdown').textContent = v;
 }
@@ -1226,12 +1213,6 @@ function switchTab(tab) {
   const labels = { script: 'Script', prompter: 'Prompter', camera: 'Camera & Audio' };
   document.getElementById('panel-title-label').textContent = labels[tab] || tab;
 }
-
-// ─── ORIENTATION ─────────────────────────────────────
-// ─── ORIENTATION ─────────────────────────────────────
-// No dynamic sensing — user sets mode explicitly via the PORTRAIT/LANDSCAPE toggle.
-// We just keep the prompter position correct if the window resizes.
-window.addEventListener('resize', () => setTimeout(applyPosition, 100));
 
 // ─── INIT ─────────────────────────────────────────────
 (async function init() {
