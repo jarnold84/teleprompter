@@ -941,6 +941,20 @@ function saveRecording() {
   switchTab('camera');
 }
 
+function downloadClip(index) {
+  const r = state.recordings[index];
+  if (!r) return;
+  // iOS Safari requires opening blob URL directly in a new tab
+  // rather than using the download attribute
+  const a = document.createElement('a');
+  a.href = r.url;
+  a.download = `clip-${index + 1}.${r.ext}`;
+  a.target = '_blank';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => document.body.removeChild(a), 200);
+}
+
 function renderRecordings() {
   const list = document.getElementById('recordings-list');
   if (state.recordings.length === 0) {
@@ -948,9 +962,12 @@ function renderRecordings() {
     return;
   }
   list.innerHTML = state.recordings.map((r, i) => `
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
-      <span style="font-size:11px;color:var(--text-dim);">Clip ${i+1} · ${r.ts}</span>
-      <a href="${r.url}" download="clip-${i+1}.${r.ext}" style="color:var(--accent);font-size:11px;text-decoration:none;border:1px solid var(--accent);padding:4px 10px;border-radius:6px;">Save</a>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px;">
+      <video src="${r.url}" controls playsinline style="width:100%;border-radius:6px;max-height:120px;background:#000;"></video>
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <span style="font-size:11px;color:var(--text-dim);">Clip ${i+1} · ${r.ts}</span>
+        <button onclick="downloadClip(${i})" style="color:var(--accent);font-size:11px;background:none;border:1px solid var(--accent);padding:4px 10px;border-radius:6px;cursor:pointer;font-family:'DM Mono',monospace;">Save</button>
+      </div>
     </div>
   `).join('');
 }
@@ -1010,6 +1027,14 @@ function applyScript() {
   document.getElementById('prompter-text').textContent = txt;
   rewindScroll();
   closePanel();
+  // Re-attach stream after panel close to prevent black screen on iOS
+  setTimeout(() => {
+    const vid = document.getElementById('camera-video');
+    if (state.stream && vid.srcObject !== state.stream) {
+      vid.srcObject = state.stream;
+    }
+    if (vid.paused) vid.play().catch(() => {});
+  }, 100);
 }
 
 function clearScript() {
