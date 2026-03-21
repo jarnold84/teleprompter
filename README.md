@@ -1,4 +1,4 @@
-# Video Teleprompter
+# iOS Mobile Browser-Based Video Teleprompter
 
 A mobile-first teleprompter + video recording web app designed for musicians, speakers, and creators. Works in both landscape and portrait orientation. No app store required — runs in Safari and can be added to your iPhone home screen.
 
@@ -14,7 +14,6 @@ A mobile-first teleprompter + video recording web app designed for musicians, sp
 - **5-second countdown** before recording starts (adjustable 0–10s)
 - **Live recording timer** with blinking REC indicator
 - **Camera, microphone, and resolution settings**
-- **Auto-scroll synced to recording** (optional)
 - **Recorded clips downloadable** directly from the app
 
 ## Usage
@@ -27,7 +26,20 @@ Open the live URL in **Safari on iPhone**. To install as a home screen app:
 
 The app will open fullscreen like a native app.
 
-## Deployment
+## Saving & Sharing Recordings
+
+After stopping a recording, tap **Save** in the Camera panel. The video will download to the **Files app** as an `.mp4`.
+
+To get it into your Camera Roll for easy sharing:
+
+1. Open the **Files app** and locate the downloaded clip
+2. Tap and hold the file to bring up the context menu
+3. Tap **Share**
+4. Tap **Save Video**
+
+The clip will now appear in your Camera Roll and can be uploaded directly from any app — YouTube, Instagram, LinkedIn, Facebook, etc.
+
+
 
 Hosted on [Vercel](https://vercel.com) via this GitHub repository. Any commit to `main` triggers an automatic redeploy.
 
