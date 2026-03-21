@@ -529,7 +529,7 @@
     </div>
 
     <div id="status-bar">
-      <div class="status-pill highlight" id="orient-pill">PORTRAIT</div>
+      <button class="status-pill highlight" id="mode-btn" onclick="toggleMode()" style="cursor:pointer;font-family:'DM Mono',monospace;letter-spacing:0.06em;background:rgba(200,169,110,0.15);border-color:rgba(200,169,110,0.5);color:var(--accent);">▯ PORTRAIT</button>
       <div class="status-pill" id="cam-pill">FRONT</div>
     </div>
 
@@ -605,13 +605,13 @@
         <div class="section-label">Text Position</div>
         <div class="pos-grid">
           <button class="pos-btn" data-pos="top-left" onclick="setPosition('top-left')" title="Top Left">↖</button>
-          <button class="pos-btn" data-pos="top-center" onclick="setPosition('top-center')" title="Top Center">↑</button>
+          <button class="pos-btn active" data-pos="top-center" onclick="setPosition('top-center')" title="Top Center">↑</button>
           <button class="pos-btn" data-pos="top-right" onclick="setPosition('top-right')" title="Top Right">↗</button>
           <button class="pos-btn" data-pos="middle-left" onclick="setPosition('middle-left')" title="Middle Left">←</button>
           <button class="pos-btn center-hidden" data-pos="center"></button>
           <button class="pos-btn" data-pos="middle-right" onclick="setPosition('middle-right')" title="Middle Right">→</button>
           <button class="pos-btn" data-pos="bottom-left" onclick="setPosition('bottom-left')" title="Bottom Left">↙</button>
-          <button class="pos-btn active" data-pos="bottom-center" onclick="setPosition('bottom-center')" title="Bottom Center">↓</button>
+          <button class="pos-btn" data-pos="bottom-center" onclick="setPosition('bottom-center')" title="Bottom Center">↓</button>
           <button class="pos-btn" data-pos="bottom-right" onclick="setPosition('bottom-right')" title="Bottom Right">↘</button>
         </div>
       </div>
@@ -739,8 +739,9 @@ const state = {
   scrollPos: 0,
   isScrolling: false,
   autoScrollWithRec: true,
-  currentFacing: 'user',  // front/selfie = 'user', back = 'environment'
-  position: 'bottom-center',
+  currentFacing: 'user',
+  recordingMode: 'portrait', // 'portrait' or 'landscape'
+  position: 'top-center',
   fontSize: 24,
   boxW: 70,
   boxH: 35,
@@ -877,30 +878,24 @@ function startRecording() {
   if (!state.stream) return;
   state.recordedChunks = [];
 
-  // ── Canvas-based recording ──────────────────────────────────────────
-  // MediaRecorder captures the raw sensor stream which is always landscape.
-  // We draw each video frame onto a correctly-sized/rotated canvas instead,
-  // then record the canvas output — this bakes the correct orientation in.
-
   const vid = document.getElementById('camera-video');
-  const isPortrait = window.innerHeight > window.innerWidth;
+  const isPortrait = state.recordingMode === 'portrait';
 
-  // Determine output dimensions based on current orientation
-  // Use the video's natural dimensions to avoid guessing
+  // Wait for video to have dimensions
   const vw = vid.videoWidth || 1280;
   const vh = vid.videoHeight || 720;
 
+  // Sensor is always landscape (vw >= vh).
+  // Portrait mode: rotate 90° so output is tall (9:16).
+  // Landscape mode: pass through as-is (16:9).
   let canvasW, canvasH, rotation;
   if (isPortrait) {
-    // Portrait display: output should be taller than wide
-    // Sensor delivers landscape (vw > vh), so we rotate 90°
-    canvasW = vh;   // narrow
-    canvasH = vw;   // tall
+    canvasW = Math.min(vw, vh);  // narrow side
+    canvasH = Math.max(vw, vh);  // tall side
     rotation = 90;
   } else {
-    // Landscape: output matches sensor naturally, no rotation needed
-    canvasW = vw;
-    canvasH = vh;
+    canvasW = Math.max(vw, vh);
+    canvasH = Math.min(vw, vh);
     rotation = 0;
   }
 
@@ -909,27 +904,26 @@ function startRecording() {
   canvas.height = canvasH;
   const ctx = canvas.getContext('2d');
 
-  // Draw frames at ~30fps
   state.drawInterval = setInterval(() => {
     if (vid.readyState < 2) return;
     ctx.save();
+    ctx.clearRect(0, 0, canvasW, canvasH);
     if (rotation === 90) {
+      // Move origin to center, rotate, draw centered
       ctx.translate(canvasW / 2, canvasH / 2);
       ctx.rotate(Math.PI / 2);
-      ctx.drawImage(vid, -vw / 2, -vh / 2, vw, vh);
+      ctx.drawImage(vid, -canvasH / 2, -canvasW / 2, canvasH, canvasW);
     } else {
       ctx.drawImage(vid, 0, 0, canvasW, canvasH);
     }
     ctx.restore();
   }, 1000 / 30);
 
-  // Capture canvas stream, mix in audio from original stream
   const canvasStream = canvas.captureStream(30);
   if (state.audioEnabled) {
     state.stream.getAudioTracks().forEach(t => canvasStream.addTrack(t));
   }
 
-  // Pick best available mimeType
   const mimeTypes = ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
   let chosenMime = '';
   for (const m of mimeTypes) {
@@ -1166,16 +1160,22 @@ function applyTextTransform() {
   const transforms = [];
   if (state.textRotation) transforms.push(`rotate(${state.textRotation}deg)`);
   if (state.mirror) transforms.push('scaleX(-1)');
-  el.style.transform = transforms.join(' ');
-  // When rotated 90°, swap the scroll axis
-  const container = document.getElementById('prompter-scroll-container');
-  if (state.textRotation === 90 || state.textRotation === -90) {
-    el.style.width = document.getElementById('prompter-overlay').offsetHeight + 'px';
-    el.style.transformOrigin = 'top left';
+  el.style.transform = transforms.length ? transforms.join(' ') : '';
+}
+
+function toggleMode() {
+  state.recordingMode = state.recordingMode === 'portrait' ? 'landscape' : 'portrait';
+  const btn = document.getElementById('mode-btn');
+  if (state.recordingMode === 'portrait') {
+    btn.textContent = '▯ PORTRAIT';
+    // Auto-reset text rotation for portrait
+    state.textRotation = 0;
   } else {
-    el.style.width = '';
-    el.style.transformOrigin = 'center';
+    btn.textContent = '▭ LANDSCAPE';
+    // Auto-rotate text 90° CW so it reads correctly when phone is sideways
+    state.textRotation = 90;
   }
+  applyTextTransform();
 }
 
 
@@ -1205,21 +1205,15 @@ function switchTab(tab) {
 
 // ─── ORIENTATION ─────────────────────────────────────
 // ─── ORIENTATION ─────────────────────────────────────
-function updateOrientPill() {
-  const isLandscape = window.innerWidth > window.innerHeight;
-  document.getElementById('orient-pill').textContent = isLandscape ? 'LANDSCAPE' : 'PORTRAIT';
-  applyPosition();
-}
-
-window.addEventListener('resize', () => setTimeout(updateOrientPill, 100));
-screen.orientation && screen.orientation.addEventListener('change', () => setTimeout(updateOrientPill, 150));
-updateOrientPill();
+// No dynamic sensing — user sets mode explicitly via the PORTRAIT/LANDSCAPE toggle.
+// We just keep the prompter position correct if the window resizes.
+window.addEventListener('resize', () => setTimeout(applyPosition, 100));
 
 // ─── INIT ─────────────────────────────────────────────
 (async function init() {
-  // Set initial prompter overlay styles
   document.getElementById('prompter-overlay').style.backgroundColor = `rgba(30,30,30,0.75)`;
   document.getElementById('prompter-text').style.fontSize = '24px';
+  state.position = 'top-center';
   applyPosition();
   await initCamera();
 })();
