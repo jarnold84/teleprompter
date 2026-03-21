@@ -531,6 +531,7 @@
     <div id="status-bar">
       <button class="status-pill highlight" id="mode-btn" onclick="toggleMode()" style="cursor:pointer;font-family:'DM Mono',monospace;letter-spacing:0.06em;background:rgba(200,169,110,0.15);border-color:rgba(200,169,110,0.5);color:var(--accent);">▯ PORTRAIT</button>
       <div class="status-pill" id="cam-pill">FRONT</div>
+      <div class="status-pill" id="debug-pill" style="color:#6ec88a;border-color:rgba(110,200,138,0.3);">...</div>
     </div>
 
     <div id="prompter-controls">
@@ -760,9 +761,6 @@ const state = {
 // ─── CAMERA ──────────────────────────────────────────
 async function initCamera() {
   document.getElementById('cam-error').classList.remove('show');
-
-  // Don't specify width/height — let iOS deliver whatever the sensor
-  // natively prefers for the current orientation. object-fit:cover handles display.
   const constraints = {
     video: {
       facingMode: state.currentFacing,
@@ -777,8 +775,14 @@ async function initCamera() {
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
     state.stream = stream;
     const vid = document.getElementById('camera-video');
-    vid.style.transform = '';
+    // Mirror front camera so it feels natural (like a mirror)
+    vid.style.transform = state.currentFacing === 'user' ? 'scaleX(-1)' : '';
     vid.srcObject = stream;
+    // Once metadata loads, show actual sensor dimensions for debugging
+    vid.onloadedmetadata = () => {
+      const dp = document.getElementById('debug-pill');
+      if (dp) dp.textContent = `${vid.videoWidth}×${vid.videoHeight} angle:${screen.orientation ? screen.orientation.angle : '?'}`;
+    };
     await populateDevices();
     updateCamPill();
   } catch (e) {
@@ -836,6 +840,9 @@ function updateAudioEnabled() {
 function updateCamPill() {
   const pill = document.getElementById('cam-pill');
   pill.textContent = state.currentFacing === 'user' ? 'FRONT' : 'BACK';
+  // Keep mirror in sync with camera facing
+  const vid = document.getElementById('camera-video');
+  if (vid) vid.style.transform = state.currentFacing === 'user' ? 'scaleX(-1)' : '';
 }
 
 // ─── RECORDING ───────────────────────────────────────
@@ -879,24 +886,30 @@ function startRecording() {
   state.recordedChunks = [];
 
   const vid = document.getElementById('camera-video');
-  const isPortrait = state.recordingMode === 'portrait';
 
-  // Wait for video to have dimensions
-  const vw = vid.videoWidth || 1280;
-  const vh = vid.videoHeight || 720;
+  // Get actual sensor dimensions — these are always the raw sensor values
+  // regardless of how the phone is held. On iPhone 13 this will be 1280×960
+  // or 1920×1080 etc., always landscape (width >= height).
+  const sensorW = vid.videoWidth || 1280;
+  const sensorH = vid.videoHeight || 720;
 
-  // Sensor is always landscape (vw >= vh).
-  // Portrait mode: rotate 90° so output is tall (9:16).
-  // Landscape mode: pass through as-is (16:9).
-  let canvasW, canvasH, rotation;
-  if (isPortrait) {
-    canvasW = Math.min(vw, vh);  // narrow side
-    canvasH = Math.max(vw, vh);  // tall side
-    rotation = 90;
+  // Get the current device orientation angle
+  const angle = (screen.orientation && screen.orientation.angle !== undefined)
+    ? screen.orientation.angle : 0;
+
+  const isFront = state.currentFacing === 'user';
+  const isPortraitMode = state.recordingMode === 'portrait';
+
+  // Determine canvas output size
+  // Portrait: tall output (swap sensor dims)
+  // Landscape: wide output (use sensor dims as-is)
+  let canvasW, canvasH;
+  if (isPortraitMode) {
+    canvasW = sensorH;
+    canvasH = sensorW;
   } else {
-    canvasW = Math.max(vw, vh);
-    canvasH = Math.min(vw, vh);
-    rotation = 0;
+    canvasW = sensorW;
+    canvasH = sensorH;
   }
 
   const canvas = document.createElement('canvas');
@@ -904,22 +917,29 @@ function startRecording() {
   canvas.height = canvasH;
   const ctx = canvas.getContext('2d');
 
+  // Update debug pill with what we're actually recording
+  const dp = document.getElementById('debug-pill');
+  if (dp) dp.textContent = `REC ${canvasW}×${canvasH} a:${angle}`;
+
   state.drawInterval = setInterval(() => {
     if (vid.readyState < 2) return;
     ctx.save();
     ctx.clearRect(0, 0, canvasW, canvasH);
-    if (rotation === 90) {
-      // Sensor delivers landscape: vw wide, vh tall (vw > vh)
-      // We want portrait output: canvasW = vh, canvasH = vw
-      // Rotate 90° CW: translate to canvas center, rotate, draw
+
+    if (isPortraitMode) {
+      // We want a portrait (tall) output from a landscape sensor stream.
+      // Move to canvas center, rotate 90° CCW, mirror if front camera.
       ctx.translate(canvasW / 2, canvasH / 2);
-      ctx.rotate(Math.PI / 2);
-      // After rotation, x-axis points down, y-axis points left
-      // Draw centered: width becomes canvasH, height becomes canvasW
-      ctx.drawImage(vid, -canvasH / 2, -canvasW / 2, canvasH, canvasW);
+      ctx.rotate(-Math.PI / 2);  // CCW rotation
+      if (isFront) ctx.scale(-1, 1);  // mirror front cam
+      ctx.drawImage(vid, -sensorW / 2, -sensorH / 2, sensorW, sensorH);
     } else {
-      ctx.drawImage(vid, 0, 0, canvasW, canvasH);
+      // Landscape: draw straight, mirror if front cam
+      ctx.translate(canvasW / 2, canvasH / 2);
+      if (isFront) ctx.scale(-1, 1);
+      ctx.drawImage(vid, -sensorW / 2, -sensorH / 2, sensorW, sensorH);
     }
+
     ctx.restore();
   }, 1000 / 30);
 
