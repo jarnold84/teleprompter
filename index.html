@@ -474,7 +474,7 @@
     top: 14px; left: 14px;
     display: flex; gap: 8px;
     z-index: 30;
-    pointer-events: none;
+    pointer-events: all;
   }
   .status-pill {
     background: rgba(0,0,0,0.5);
@@ -909,9 +909,13 @@ function startRecording() {
     ctx.save();
     ctx.clearRect(0, 0, canvasW, canvasH);
     if (rotation === 90) {
-      // Move origin to center, rotate, draw centered
+      // Sensor delivers landscape: vw wide, vh tall (vw > vh)
+      // We want portrait output: canvasW = vh, canvasH = vw
+      // Rotate 90° CW: translate to canvas center, rotate, draw
       ctx.translate(canvasW / 2, canvasH / 2);
       ctx.rotate(Math.PI / 2);
+      // After rotation, x-axis points down, y-axis points left
+      // Draw centered: width becomes canvasH, height becomes canvasW
       ctx.drawImage(vid, -canvasH / 2, -canvasW / 2, canvasH, canvasW);
     } else {
       ctx.drawImage(vid, 0, 0, canvasW, canvasH);
