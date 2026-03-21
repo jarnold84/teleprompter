@@ -760,11 +760,11 @@ const state = {
 async function initCamera() {
   document.getElementById('cam-error').classList.remove('show');
   const res = state.resolution;
-  const isPortrait = window.innerHeight > window.innerWidth;
 
-  // Swap width/height when in portrait so we request native portrait dimensions
-  const vw = isPortrait ? Math.min(res.w, res.h) : Math.max(res.w, res.h);
-  const vh = isPortrait ? Math.max(res.w, res.h) : Math.min(res.w, res.h);
+  // Always request landscape dimensions — iOS sensors are physically landscape.
+  // Swapping w/h causes the sensor to crop/zoom. We handle portrait display via CSS transform.
+  const vw = Math.max(res.w, res.h);
+  const vh = Math.min(res.w, res.h);
 
   const constraints = {
     video: {
@@ -785,9 +785,28 @@ async function initCamera() {
     vid.srcObject = stream;
     await populateDevices();
     updateCamPill();
+    applyVideoOrientation();
   } catch (e) {
     console.error(e);
     document.getElementById('cam-error').classList.add('show');
+  }
+}
+
+function applyVideoOrientation() {
+  const vid = document.getElementById('camera-video');
+  const isPortrait = window.innerHeight > window.innerWidth;
+
+  if (isPortrait) {
+    // Rotate the landscape stream 90deg to fill portrait screen
+    // Scale it so it fills edge-to-edge without black bars
+    const scaleRatio = window.innerHeight / window.innerWidth;
+    vid.style.transform = `rotate(90deg) scaleX(${scaleRatio})`;
+    vid.style.width = '100%';
+    vid.style.height = '100%';
+  } else {
+    vid.style.transform = '';
+    vid.style.width = '100%';
+    vid.style.height = '100%';
   }
 }
 
@@ -1141,11 +1160,13 @@ function switchTab(tab) {
 function handleOrientation() {
   const isLandscape = window.innerWidth > window.innerHeight;
   document.getElementById('orient-pill').textContent = isLandscape ? 'LANDSCAPE' : 'PORTRAIT';
-  // Re-request camera with correct orientation dimensions
-  if (state.stream) initCamera();
+  applyVideoOrientation();
 }
 window.addEventListener('resize', handleOrientation);
-screen.orientation && screen.orientation.addEventListener('change', handleOrientation);
+screen.orientation && screen.orientation.addEventListener('change', () => {
+  // Small delay to let the browser finish resizing after rotation
+  setTimeout(handleOrientation, 150);
+});
 handleOrientation();
 
 // ─── INIT ─────────────────────────────────────────────
