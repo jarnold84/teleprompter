@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen">
+<title>Prompter — Soulforce</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;1,9..144,300&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d0d0d;
+    --surface: #161616;
+    --surface2: #1e1e1e;
+    --border: #2a2a2a;
+    --accent: #c8a96e;
+    --accent2: #7eb8c8;
+    --text: #f0ede8;
+    --text-dim: #888;
+    --danger: #c86e6e;
+    --green: #6ec88a;
+    --radius: 10px;
+    --panel-w: 320px;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    overflow: hidden;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /* ─── LAYOUT ─── */
+  #app { width: 100%; height: 100%; display: flex; flex-direction: column; }
+
+  #main-area {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background: #000;
+  }
+
+  /* Camera */
+  #camera-video {
+    position: absolute;
+    inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    transform-origin: center;
+  }
+
+  /* Teleprompter overlay */
+  #prompter-overlay {
+    position: absolute;
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+    pointer-events: none;
+    transition: all 0.3s ease;
+    overflow: hidden;
+  }
+
+  #prompter-scroll-container {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+  }
+
+  #prompter-text {
+    padding: 20px 24px;
+    color: #fff;
+    line-height: 1.55;
+    font-family: 'Fraunces', serif;
+    font-weight: 300;
+    white-space: pre-wrap;
+    word-break: break-word;
+    position: relative;
+  }
+
+  /* Countdown overlay */
+  #countdown-overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.6);
+    z-index: 50;
+  }
+  #countdown-overlay.active { display: flex; }
+  #countdown-num {
+    font-family: 'Fraunces', serif;
+    font-size: clamp(80px, 20vw, 160px);
+    font-weight: 600;
+    color: var(--accent);
+    text-shadow: 0 0 40px rgba(200,169,110,0.6);
+    animation: pulse-count 1s ease-in-out;
+  }
+  @keyframes pulse-count {
+    0% { transform: scale(1.4); opacity: 0; }
+    30% { transform: scale(1); opacity: 1; }
+    80% { transform: scale(1); opacity: 1; }
+    100% { transform: scale(0.8); opacity: 0; }
+  }
+
+  /* Recording timer */
+  #rec-timer {
+    position: absolute;
+    top: 14px;
+    right: 16px;
+    display: none;
+    align-items: center;
+    gap: 8px;
+    background: rgba(0,0,0,0.55);
+    border: 1px solid rgba(200,110,110,0.4);
+    padding: 5px 12px;
+    border-radius: 20px;
+    z-index: 40;
+    font-size: 13px;
+    letter-spacing: 0.05em;
+  }
+  #rec-timer.active { display: flex; }
+  #rec-dot {
+    width: 8px; height: 8px;
+    background: var(--danger);
+    border-radius: 50%;
+    animation: blink 1s infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+  /* ─── BOTTOM BAR ─── */
+  #bottom-bar {
+    height: 64px;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    gap: 10px;
+    flex-shrink: 0;
+    z-index: 10;
+  }
+
+  .bar-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: var(--radius);
+    transition: all 0.15s;
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    min-width: 48px;
+  }
+  .bar-btn:hover { color: var(--text); background: var(--surface2); }
+  .bar-btn.active { color: var(--accent); }
+  .bar-btn svg { width: 22px; height: 22px; }
+
+  #record-btn {
+    width: 54px; height: 54px;
+    border-radius: 50%;
+    border: 3px solid var(--danger);
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+  #record-btn .rec-inner {
+    width: 36px; height: 36px;
+    background: var(--danger);
+    border-radius: 50%;
+    transition: all 0.2s;
+  }
+  #record-btn.recording .rec-inner {
+    border-radius: 6px;
+    width: 22px; height: 22px;
+    background: var(--danger);
+  }
+  #record-btn:hover { border-color: #e07a7a; }
+
+  /* ─── SIDE PANEL ─── */
+  #side-panel {
+    position: fixed;
+    top: 0; right: 0;
+    width: var(--panel-w);
+    height: 100%;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    transform: translateX(100%);
+    transition: transform 0.3s cubic-bezier(0.16,1,0.3,1);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #side-panel.open { transform: translateX(0); }
+
+  #panel-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 99;
+    display: none;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  #panel-backdrop.open { display: block; opacity: 1; }
+
+  .panel-header {
+    padding: 18px 18px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .panel-title {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .panel-close {
+    background: none; border: none;
+    color: var(--text-dim); cursor: pointer;
+    width: 28px; height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 6px;
+  }
+  .panel-close:hover { background: var(--surface2); color: var(--text); }
+
+  .panel-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .panel-body::-webkit-scrollbar { width: 4px; }
+  .panel-body::-webkit-scrollbar-track { background: transparent; }
+  .panel-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .section-label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+  }
+
+  .ctrl-group { display: flex; flex-direction: column; gap: 12px; }
+
+  .ctrl-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .ctrl-label { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+  .ctrl-value {
+    font-size: 12px;
+    color: var(--accent);
+    min-width: 32px;
+    text-align: right;
+  }
+
+  input[type=range] {
+    -webkit-appearance: none;
+    flex: 1;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px; height: 16px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    box-shadow: 0 0 0 3px rgba(200,169,110,0.2);
+  }
+
+  /* Position grid */
+  .pos-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+  .pos-btn {
+    aspect-ratio: 1;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    font-size: 18px;
+  }
+  .pos-btn:hover { border-color: var(--accent); }
+  .pos-btn.active { background: rgba(200,169,110,0.15); border-color: var(--accent); }
+  .pos-btn.center-hidden { visibility: hidden; }
+
+  /* Toggle switch */
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .toggle {
+    position: relative;
+    width: 40px; height: 22px;
+    cursor: pointer;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle-track {
+    position: absolute; inset: 0;
+    background: var(--border);
+    border-radius: 11px;
+    transition: background 0.2s;
+  }
+  .toggle input:checked + .toggle-track { background: var(--accent); }
+  .toggle-thumb {
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 16px; height: 16px;
+    background: white;
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .toggle input:checked ~ .toggle-thumb { transform: translateX(18px); }
+
+  /* Select */
+  select {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    padding: 7px 10px;
+    border-radius: 7px;
+    outline: none;
+    cursor: pointer;
+    width: 100%;
+  }
+  select:focus { border-color: var(--accent); }
+
+  /* Script textarea */
+  #script-textarea {
+    width: 100%;
+    min-height: 160px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'Fraunces', serif;
+    font-size: 14px;
+    font-weight: 300;
+    line-height: 1.6;
+    padding: 12px;
+    border-radius: var(--radius);
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  #script-textarea:focus { border-color: var(--accent); }
+
+  .action-btn {
+    width: 100%;
+    padding: 10px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.15s;
+    letter-spacing: 0.04em;
+  }
+  .action-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .action-btn.primary {
+    background: rgba(200,169,110,0.1);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  /* Tabs in panel */
+  .panel-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .panel-tab {
+    flex: 1;
+    padding: 11px 6px;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.15s;
+    margin-bottom: -1px;
+  }
+  .panel-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .tab-pane { display: none; }
+  .tab-pane.active { display: flex; flex-direction: column; gap: 20px; }
+
+  /* Prompter play controls */
+  #prompter-controls {
+    position: absolute;
+    bottom: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 10px;
+    z-index: 30;
+    background: rgba(0,0,0,0.4);
+    padding: 8px 14px;
+    border-radius: 30px;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  .pc-btn {
+    background: none; border: none;
+    color: rgba(255,255,255,0.7);
+    cursor: pointer;
+    width: 36px; height: 36px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    transition: all 0.15s;
+  }
+  .pc-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
+  .pc-btn.active { color: var(--accent); }
+  .pc-btn svg { width: 20px; height: 20px; }
+
+  /* Error/permission */
+  #cam-error {
+    position: absolute; inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--bg);
+    z-index: 5;
+    text-align: center;
+    padding: 24px;
+  }
+  #cam-error.show { display: flex; }
+  #cam-error p { color: var(--text-dim); font-size: 13px; line-height: 1.6; }
+
+  /* Status pills */
+  #status-bar {
+    position: absolute;
+    top: 14px; left: 14px;
+    display: flex; gap: 8px;
+    z-index: 30;
+    pointer-events: none;
+  }
+  .status-pill {
+    background: rgba(0,0,0,0.5);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 20px;
+    padding: 4px 10px;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: rgba(255,255,255,0.6);
+    text-transform: uppercase;
+  }
+  .status-pill.highlight { color: var(--accent2); border-color: rgba(126,184,200,0.3); }
+
+  /* Scrollbar progress */
+  #scroll-progress {
+    position: absolute;
+    left: 0; top: 0;
+    width: 3px;
+    height: 0%;
+    background: var(--accent);
+    opacity: 0.7;
+    z-index: 35;
+    transition: height 0.1s linear;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="main-area">
+    <video id="camera-video" autoplay playsinline muted></video>
+
+    <div id="cam-error">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 7 16 12l7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+      <p>Camera access is required.<br>Please allow camera permissions in Safari Settings, then reload.</p>
+      <button class="action-btn primary" onclick="initCamera()">Try Again</button>
+    </div>
+
+    <div id="prompter-overlay">
+      <div id="scroll-progress"></div>
+      <div id="prompter-scroll-container">
+        <div id="prompter-text"></div>
+      </div>
+    </div>
+
+    <div id="countdown-overlay">
+      <div id="countdown-num">5</div>
+    </div>
+
+    <div id="rec-timer">
+      <div id="rec-dot"></div>
+      <span id="rec-time-display">00:00</span>
+    </div>
+
+    <div id="status-bar">
+      <div class="status-pill highlight" id="orient-pill">LANDSCAPE</div>
+      <div class="status-pill" id="cam-pill">FRONT</div>
+    </div>
+
+    <div id="prompter-controls">
+      <button class="pc-btn" id="btn-rewind" title="Rewind">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 3a9 9 0 1 0 6.364 2.636L17.5 7A7 7 0 1 1 12.5 5V3z"/><path d="M11 3h3v5l-3-1V3z"/><rect x="8" y="9" width="2" height="6"/><polygon points="14,9 14,15 19,12"/></svg>
+      </button>
+      <button class="pc-btn active" id="btn-play-pause" title="Play/Pause">
+        <svg id="icon-play" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+        <svg id="icon-pause" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+      </button>
+      <button class="pc-btn" id="btn-speed-down" title="Slower">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M5 12l4-4M5 12l4 4"/></svg>
+      </button>
+      <button class="pc-btn" id="btn-speed-up" title="Faster">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M19 12l-4-4M19 12l-4 4"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div id="bottom-bar">
+    <button class="bar-btn" id="btn-script" onclick="openPanel('script')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+      Script
+    </button>
+    <button class="bar-btn" id="btn-prompter" onclick="openPanel('prompter')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+      Prompter
+    </button>
+    <button id="record-btn" title="Record">
+      <div class="rec-inner"></div>
+    </button>
+    <button class="bar-btn" id="btn-camera" onclick="openPanel('camera')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M23 7 16 12l7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+      Camera
+    </button>
+    <button class="bar-btn" id="btn-flip" onclick="flipCamera()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+      Flip
+    </button>
+  </div>
+</div>
+
+<!-- SIDE PANEL -->
+<div id="panel-backdrop" onclick="closePanel()"></div>
+<div id="side-panel">
+  <div class="panel-header">
+    <span class="panel-title" id="panel-title-label">Script</span>
+    <button class="panel-close" onclick="closePanel()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <div class="panel-tabs">
+    <button class="panel-tab active" data-tab="script" onclick="switchTab('script')">Script</button>
+    <button class="panel-tab" data-tab="prompter" onclick="switchTab('prompter')">Prompter</button>
+    <button class="panel-tab" data-tab="camera" onclick="switchTab('camera')">Camera</button>
+  </div>
+  <div class="panel-body">
+
+    <!-- SCRIPT TAB -->
+    <div class="tab-pane active" id="tab-script">
+      <div>
+        <div class="section-label">Your Script</div>
+        <textarea id="script-textarea" placeholder="Paste or type your script here…&#10;&#10;It will scroll automatically while you record." spellcheck="true"></textarea>
+      </div>
+      <button class="action-btn primary" onclick="applyScript()">Apply to Prompter</button>
+      <button class="action-btn" onclick="clearScript()">Clear Script</button>
+    </div>
+
+    <!-- PROMPTER TAB -->
+    <div class="tab-pane" id="tab-prompter">
+      <div>
+        <div class="section-label">Text Position</div>
+        <div class="pos-grid">
+          <button class="pos-btn" data-pos="top-left" onclick="setPosition('top-left')" title="Top Left">↖</button>
+          <button class="pos-btn" data-pos="top-center" onclick="setPosition('top-center')" title="Top Center">↑</button>
+          <button class="pos-btn" data-pos="top-right" onclick="setPosition('top-right')" title="Top Right">↗</button>
+          <button class="pos-btn" data-pos="middle-left" onclick="setPosition('middle-left')" title="Middle Left">←</button>
+          <button class="pos-btn center-hidden" data-pos="center"></button>
+          <button class="pos-btn" data-pos="middle-right" onclick="setPosition('middle-right')" title="Middle Right">→</button>
+          <button class="pos-btn" data-pos="bottom-left" onclick="setPosition('bottom-left')" title="Bottom Left">↙</button>
+          <button class="pos-btn active" data-pos="bottom-center" onclick="setPosition('bottom-center')" title="Bottom Center">↓</button>
+          <button class="pos-btn" data-pos="bottom-right" onclick="setPosition('bottom-right')" title="Bottom Right">↘</button>
+        </div>
+      </div>
+
+      <div class="ctrl-group">
+        <div class="section-label">Display</div>
+
+        <div class="ctrl-row">
+          <span class="ctrl-label">Text size</span>
+          <input type="range" id="sl-font-size" min="14" max="52" value="24" oninput="updateFontSize(this.value)">
+          <span class="ctrl-value" id="val-font-size">24</span>
+        </div>
+
+        <div class="ctrl-row">
+          <span class="ctrl-label">Box width</span>
+          <input type="range" id="sl-box-w" min="20" max="100" value="70" oninput="updateBoxWidth(this.value)">
+          <span class="ctrl-value" id="val-box-w">70%</span>
+        </div>
+
+        <div class="ctrl-row">
+          <span class="ctrl-label">Box height</span>
+          <input type="range" id="sl-box-h" min="10" max="80" value="35" oninput="updateBoxHeight(this.value)">
+          <span class="ctrl-value" id="val-box-h">35%</span>
+        </div>
+
+        <div class="ctrl-row">
+          <span class="ctrl-label">Opacity</span>
+          <input type="range" id="sl-opacity" min="0" max="100" value="75" oninput="updateOpacity(this.value)">
+          <span class="ctrl-value" id="val-opacity">75%</span>
+        </div>
+
+        <div class="ctrl-row">
+          <span class="ctrl-label">Scroll speed</span>
+          <input type="range" id="sl-speed" min="1" max="10" value="3" oninput="updateSpeed(this.value)">
+          <span class="ctrl-value" id="val-speed">3</span>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">Options</div>
+        <div class="ctrl-group">
+          <div class="toggle-row">
+            <span class="ctrl-label">Mirror text</span>
+            <label class="toggle">
+              <input type="checkbox" id="tog-mirror" onchange="updateMirror()">
+              <div class="toggle-track"></div>
+              <div class="toggle-thumb"></div>
+            </label>
+          </div>
+          <div class="toggle-row">
+            <span class="ctrl-label">Auto-scroll with recording</span>
+            <label class="toggle">
+              <input type="checkbox" id="tog-auto-scroll" checked onchange="updateAutoScroll()">
+              <div class="toggle-track"></div>
+              <div class="toggle-thumb"></div>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CAMERA TAB -->
+    <div class="tab-pane" id="tab-camera">
+      <div>
+        <div class="section-label">Camera</div>
+        <div class="ctrl-group">
+          <div>
+            <div class="ctrl-label" style="margin-bottom:7px">Video input</div>
+            <select id="sel-camera" onchange="changeCamera(this.value)"></select>
+          </div>
+          <div>
+            <div class="ctrl-label" style="margin-bottom:7px">Resolution</div>
+            <select id="sel-resolution" onchange="changeResolution(this.value)">
+              <option value="1920x1080">1920 × 1080 (1080p)</option>
+              <option value="1280x720" selected>1280 × 720 (720p)</option>
+              <option value="3840x2160">3840 × 2160 (4K)</option>
+              <option value="640x480">640 × 480 (SD)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">Audio</div>
+        <div class="ctrl-group">
+          <div>
+            <div class="ctrl-label" style="margin-bottom:7px">Microphone</div>
+            <select id="sel-mic" onchange="changeMic(this.value)"></select>
+          </div>
+          <div class="toggle-row">
+            <span class="ctrl-label">Audio enabled</span>
+            <label class="toggle">
+              <input type="checkbox" id="tog-audio" checked onchange="updateAudioEnabled()">
+              <div class="toggle-track"></div>
+              <div class="toggle-thumb"></div>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">Countdown</div>
+        <div class="ctrl-row">
+          <span class="ctrl-label">Seconds before record</span>
+          <input type="range" id="sl-countdown" min="0" max="10" value="5" oninput="updateCountdown(this.value)">
+          <span class="ctrl-value" id="val-countdown">5</span>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-label">Recordings</div>
+        <div id="recordings-list" style="display:flex;flex-direction:column;gap:8px;">
+          <p style="font-size:12px;color:var(--text-dim);">Recordings will appear here after you stop.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ─── STATE ───────────────────────────────────────────
+const state = {
+  stream: null,
+  mediaRecorder: null,
+  recordedChunks: [],
+  isRecording: false,
+  recStartTime: null,
+  recTimerInterval: null,
+  countdownVal: 5,
+  countdownTimer: null,
+  scrollInterval: null,
+  scrollPos: 0,
+  isScrolling: false,
+  autoScrollWithRec: true,
+  currentFacing: 'user',  // front/selfie = 'user', back = 'environment'
+  position: 'bottom-center',
+  fontSize: 24,
+  boxW: 70,
+  boxH: 35,
+  opacity: 75,
+  speed: 3,
+  mirror: false,
+  audioEnabled: true,
+  selectedCameraId: null,
+  selectedMicId: null,
+  resolution: { w: 1280, h: 720 },
+  recordings: [],
+};
+
+// ─── CAMERA ──────────────────────────────────────────
+async function initCamera() {
+  document.getElementById('cam-error').classList.remove('show');
+  const res = state.resolution;
+  const constraints = {
+    video: {
+      facingMode: state.currentFacing,
+      width: { ideal: res.w },
+      height: { ideal: res.h },
+      ...(state.selectedCameraId ? { deviceId: { exact: state.selectedCameraId } } : {})
+    },
+    audio: state.audioEnabled
+      ? (state.selectedMicId ? { deviceId: { exact: state.selectedMicId } } : true)
+      : false
+  };
+  try {
+    if (state.stream) state.stream.getTracks().forEach(t => t.stop());
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    state.stream = stream;
+    document.getElementById('camera-video').srcObject = stream;
+    await populateDevices();
+    updateCamPill();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('cam-error').classList.add('show');
+  }
+}
+
+async function populateDevices() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const camSel = document.getElementById('sel-camera');
+    const micSel = document.getElementById('sel-mic');
+    const cams = devices.filter(d => d.kind === 'videoinput');
+    const mics = devices.filter(d => d.kind === 'audioinput');
+    camSel.innerHTML = cams.map(d => `<option value="${d.deviceId}">${d.label || 'Camera ' + d.deviceId.slice(0,6)}</option>`).join('');
+    micSel.innerHTML = mics.map(d => `<option value="${d.deviceId}">${d.label || 'Mic ' + d.deviceId.slice(0,6)}</option>`).join('');
+    if (state.stream) {
+      const vTrack = state.stream.getVideoTracks()[0];
+      if (vTrack) {
+        const settings = vTrack.getSettings();
+        if (settings.deviceId) camSel.value = settings.deviceId;
+      }
+      const aTrack = state.stream.getAudioTracks()[0];
+      if (aTrack) {
+        const settings = aTrack.getSettings();
+        if (settings.deviceId) micSel.value = settings.deviceId;
+      }
+    }
+  } catch(e) { console.warn('Device enumeration failed', e); }
+}
+
+function flipCamera() {
+  state.currentFacing = state.currentFacing === 'user' ? 'environment' : 'user';
+  state.selectedCameraId = null;
+  initCamera();
+}
+
+function changeCamera(deviceId) {
+  state.selectedCameraId = deviceId;
+  state.currentFacing = undefined;
+  initCamera();
+}
+
+function changeMic(deviceId) {
+  state.selectedMicId = deviceId;
+  initCamera();
+}
+
+function changeResolution(val) {
+  const [w, h] = val.split('x').map(Number);
+  state.resolution = { w, h };
+  initCamera();
+}
+
+function updateAudioEnabled() {
+  state.audioEnabled = document.getElementById('tog-audio').checked;
+  initCamera();
+}
+
+function updateCamPill() {
+  const pill = document.getElementById('cam-pill');
+  pill.textContent = state.currentFacing === 'user' ? 'FRONT' : 'BACK';
+}
+
+// ─── RECORDING ───────────────────────────────────────
+document.getElementById('record-btn').addEventListener('click', () => {
+  if (state.isRecording) {
+    stopRecording();
+  } else {
+    startCountdown();
+  }
+});
+
+function startCountdown() {
+  let n = state.countdownVal;
+  if (n === 0) { startRecording(); return; }
+  const overlay = document.getElementById('countdown-overlay');
+  const numEl = document.getElementById('countdown-num');
+  overlay.classList.add('active');
+  numEl.textContent = n;
+  // Restart animation
+  numEl.style.animation = 'none';
+  void numEl.offsetWidth;
+  numEl.style.animation = 'pulse-count 1s ease-in-out';
+
+  state.countdownTimer = setInterval(() => {
+    n--;
+    if (n <= 0) {
+      clearInterval(state.countdownTimer);
+      overlay.classList.remove('active');
+      startRecording();
+    } else {
+      numEl.textContent = n;
+      numEl.style.animation = 'none';
+      void numEl.offsetWidth;
+      numEl.style.animation = 'pulse-count 1s ease-in-out';
+    }
+  }, 1000);
+}
+
+function startRecording() {
+  if (!state.stream) return;
+  state.recordedChunks = [];
+  const options = { mimeType: 'video/mp4' };
+  try {
+    state.mediaRecorder = new MediaRecorder(state.stream, options);
+  } catch(e) {
+    try {
+      state.mediaRecorder = new MediaRecorder(state.stream, { mimeType: 'video/webm;codecs=vp8,opus' });
+    } catch(e2) {
+      state.mediaRecorder = new MediaRecorder(state.stream);
+    }
+  }
+  state.mediaRecorder.ondataavailable = e => {
+    if (e.data.size > 0) state.recordedChunks.push(e.data);
+  };
+  state.mediaRecorder.onstop = saveRecording;
+  state.mediaRecorder.start(100);
+  state.isRecording = true;
+  state.recStartTime = Date.now();
+
+  document.getElementById('record-btn').classList.add('recording');
+  document.getElementById('rec-timer').classList.add('active');
+
+  state.recTimerInterval = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - state.recStartTime) / 1000);
+    const m = String(Math.floor(elapsed / 60)).padStart(2,'0');
+    const s = String(elapsed % 60).padStart(2,'0');
+    document.getElementById('rec-time-display').textContent = `${m}:${s}`;
+  }, 500);
+
+  if (state.autoScrollWithRec) startScroll();
+}
+
+function stopRecording() {
+  if (state.mediaRecorder && state.isRecording) {
+    state.mediaRecorder.stop();
+  }
+  state.isRecording = false;
+  document.getElementById('record-btn').classList.remove('recording');
+  document.getElementById('rec-timer').classList.remove('active');
+  clearInterval(state.recTimerInterval);
+  if (state.autoScrollWithRec) pauseScroll();
+}
+
+function saveRecording() {
+  const mimeType = state.mediaRecorder.mimeType || 'video/mp4';
+  const ext = mimeType.includes('webm') ? 'webm' : 'mp4';
+  const blob = new Blob(state.recordedChunks, { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const ts = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  state.recordings.push({ url, ts, ext, blob });
+  renderRecordings();
+  openPanel('camera');
+  switchTab('camera');
+}
+
+function renderRecordings() {
+  const list = document.getElementById('recordings-list');
+  if (state.recordings.length === 0) {
+    list.innerHTML = '<p style="font-size:12px;color:var(--text-dim);">Recordings will appear here after you stop.</p>';
+    return;
+  }
+  list.innerHTML = state.recordings.map((r, i) => `
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+      <span style="font-size:11px;color:var(--text-dim);">Clip ${i+1} · ${r.ts}</span>
+      <a href="${r.url}" download="clip-${i+1}.${r.ext}" style="color:var(--accent);font-size:11px;text-decoration:none;border:1px solid var(--accent);padding:4px 10px;border-radius:6px;">Save</a>
+    </div>
+  `).join('');
+}
+
+// ─── PROMPTER SCROLLING ──────────────────────────────
+function startScroll() {
+  if (state.isScrolling) return;
+  state.isScrolling = true;
+  document.getElementById('icon-play').style.display = 'none';
+  document.getElementById('icon-pause').style.display = '';
+
+  const container = document.getElementById('prompter-scroll-container');
+  const text = document.getElementById('prompter-text');
+  const progress = document.getElementById('scroll-progress');
+
+  state.scrollInterval = setInterval(() => {
+    const maxScroll = text.scrollHeight - container.clientHeight;
+    if (maxScroll <= 0) return;
+    state.scrollPos = Math.min(state.scrollPos + state.speed * 0.4, maxScroll);
+    container.scrollTop = state.scrollPos;
+    const pct = (state.scrollPos / maxScroll) * 100;
+    progress.style.height = pct + '%';
+  }, 30);
+}
+
+function pauseScroll() {
+  state.isScrolling = false;
+  clearInterval(state.scrollInterval);
+  document.getElementById('icon-play').style.display = '';
+  document.getElementById('icon-pause').style.display = 'none';
+}
+
+function rewindScroll() {
+  state.scrollPos = 0;
+  document.getElementById('prompter-scroll-container').scrollTop = 0;
+  document.getElementById('scroll-progress').style.height = '0%';
+}
+
+document.getElementById('btn-play-pause').addEventListener('click', () => {
+  state.isScrolling ? pauseScroll() : startScroll();
+});
+document.getElementById('btn-rewind').addEventListener('click', rewindScroll);
+document.getElementById('btn-speed-down').addEventListener('click', () => {
+  state.speed = Math.max(1, state.speed - 1);
+  document.getElementById('sl-speed').value = state.speed;
+  document.getElementById('val-speed').textContent = state.speed;
+});
+document.getElementById('btn-speed-up').addEventListener('click', () => {
+  state.speed = Math.min(10, state.speed + 1);
+  document.getElementById('sl-speed').value = state.speed;
+  document.getElementById('val-speed').textContent = state.speed;
+});
+
+// ─── SCRIPT ──────────────────────────────────────────
+function applyScript() {
+  const txt = document.getElementById('script-textarea').value;
+  document.getElementById('prompter-text').textContent = txt;
+  rewindScroll();
+  closePanel();
+}
+
+function clearScript() {
+  document.getElementById('script-textarea').value = '';
+  document.getElementById('prompter-text').textContent = '';
+  rewindScroll();
+}
+
+// ─── PROMPTER POSITION ───────────────────────────────
+function setPosition(pos) {
+  state.position = pos;
+  document.querySelectorAll('.pos-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.pos === pos);
+  });
+  applyPosition();
+}
+
+function applyPosition() {
+  const overlay = document.getElementById('prompter-overlay');
+  const pos = state.position;
+  const w = state.boxW;
+  const h = state.boxH;
+
+  let top = 'auto', bottom = 'auto', left = 'auto', right = 'auto';
+
+  if (pos.includes('top')) top = '0';
+  if (pos.includes('bottom')) bottom = '0';
+  if (pos.includes('middle')) { top = '50%'; overlay.style.transform = 'translateY(-50%)'; }
+  else overlay.style.transform = '';
+
+  if (pos.includes('left')) left = '0';
+  if (pos.includes('right')) right = '0';
+  if (pos.includes('center')) left = `${(100-w)/2}%`;
+
+  overlay.style.top = top;
+  overlay.style.bottom = bottom;
+  overlay.style.left = left;
+  overlay.style.right = right;
+  overlay.style.width = w + '%';
+  overlay.style.height = h + '%';
+}
+
+// ─── DISPLAY CONTROLS ────────────────────────────────
+function updateFontSize(v) {
+  state.fontSize = +v;
+  document.getElementById('val-font-size').textContent = v;
+  document.getElementById('prompter-text').style.fontSize = v + 'px';
+}
+
+function updateBoxWidth(v) {
+  state.boxW = +v;
+  document.getElementById('val-box-w').textContent = v + '%';
+  applyPosition();
+}
+
+function updateBoxHeight(v) {
+  state.boxH = +v;
+  document.getElementById('val-box-h').textContent = v + '%';
+  applyPosition();
+}
+
+function updateOpacity(v) {
+  state.opacity = +v;
+  document.getElementById('val-opacity').textContent = v + '%';
+  document.getElementById('prompter-overlay').style.backgroundColor = `rgba(30,30,30,${v/100})`;
+}
+
+function updateSpeed(v) {
+  state.speed = +v;
+  document.getElementById('val-speed').textContent = v;
+}
+
+function updateMirror() {
+  state.mirror = document.getElementById('tog-mirror').checked;
+  document.getElementById('prompter-text').style.transform = state.mirror ? 'scaleX(-1)' : '';
+}
+
+function updateAutoScroll() {
+  state.autoScrollWithRec = document.getElementById('tog-auto-scroll').checked;
+}
+
+function updateCountdown(v) {
+  state.countdownVal = +v;
+  document.getElementById('val-countdown').textContent = v;
+}
+
+// ─── PANEL ───────────────────────────────────────────
+let currentPanel = null;
+function openPanel(tab) {
+  document.getElementById('side-panel').classList.add('open');
+  document.getElementById('panel-backdrop').classList.add('open');
+  switchTab(tab);
+}
+function closePanel() {
+  document.getElementById('side-panel').classList.remove('open');
+  document.getElementById('panel-backdrop').classList.remove('open');
+}
+function switchTab(tab) {
+  document.querySelectorAll('.panel-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === 'tab-' + tab));
+  const labels = { script: 'Script', prompter: 'Prompter', camera: 'Camera & Audio' };
+  document.getElementById('panel-title-label').textContent = labels[tab] || tab;
+}
+
+// ─── ORIENTATION ─────────────────────────────────────
+function handleOrientation() {
+  const isLandscape = window.innerWidth > window.innerHeight;
+  document.getElementById('orient-pill').textContent = isLandscape ? 'LANDSCAPE' : 'PORTRAIT';
+}
+window.addEventListener('resize', handleOrientation);
+screen.orientation && screen.orientation.addEventListener('change', handleOrientation);
+handleOrientation();
+
+// ─── INIT ─────────────────────────────────────────────
+(async function init() {
+  // Set initial prompter overlay styles
+  document.getElementById('prompter-overlay').style.backgroundColor = `rgba(30,30,30,0.75)`;
+  document.getElementById('prompter-text').style.fontSize = '24px';
+  applyPosition();
+  await initCamera();
+})();
+</script>
+</body>
+</html>
