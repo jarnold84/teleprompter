@@ -662,14 +662,7 @@
               <div class="toggle-thumb"></div>
             </label>
           </div>
-          <div class="toggle-row">
-            <span class="ctrl-label">Auto-scroll with recording</span>
-            <label class="toggle">
-              <input type="checkbox" id="tog-auto-scroll" checked onchange="updateAutoScroll()">
-              <div class="toggle-track"></div>
-              <div class="toggle-thumb"></div>
-            </label>
-          </div>
+
         </div>
       </div>
     </div>
@@ -767,11 +760,17 @@ const state = {
 async function initCamera() {
   document.getElementById('cam-error').classList.remove('show');
   const res = state.resolution;
+  const isPortrait = window.innerHeight > window.innerWidth;
+
+  // Swap width/height when in portrait so we request native portrait dimensions
+  const vw = isPortrait ? Math.min(res.w, res.h) : Math.max(res.w, res.h);
+  const vh = isPortrait ? Math.max(res.w, res.h) : Math.min(res.w, res.h);
+
   const constraints = {
     video: {
       facingMode: state.currentFacing,
-      width: { ideal: res.w },
-      height: { ideal: res.h },
+      width: { ideal: vw },
+      height: { ideal: vh },
       ...(state.selectedCameraId ? { deviceId: { exact: state.selectedCameraId } } : {})
     },
     audio: state.audioEnabled
@@ -782,7 +781,8 @@ async function initCamera() {
     if (state.stream) state.stream.getTracks().forEach(t => t.stop());
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
     state.stream = stream;
-    document.getElementById('camera-video').srcObject = stream;
+    const vid = document.getElementById('camera-video');
+    vid.srcObject = stream;
     await populateDevices();
     updateCamPill();
   } catch (e) {
@@ -1112,9 +1112,7 @@ function updateMirror() {
   document.getElementById('prompter-text').style.transform = state.mirror ? 'scaleX(-1)' : '';
 }
 
-function updateAutoScroll() {
-  state.autoScrollWithRec = document.getElementById('tog-auto-scroll').checked;
-}
+
 
 function updateCountdown(v) {
   state.countdownVal = +v;
@@ -1143,6 +1141,8 @@ function switchTab(tab) {
 function handleOrientation() {
   const isLandscape = window.innerWidth > window.innerHeight;
   document.getElementById('orient-pill').textContent = isLandscape ? 'LANDSCAPE' : 'PORTRAIT';
+  // Re-request camera with correct orientation dimensions
+  if (state.stream) initCamera();
 }
 window.addEventListener('resize', handleOrientation);
 screen.orientation && screen.orientation.addEventListener('change', handleOrientation);
