@@ -661,7 +661,14 @@
               <div class="toggle-thumb"></div>
             </label>
           </div>
-
+          <div>
+            <div class="ctrl-label" style="margin-bottom:8px">Text rotation</div>
+            <div style="display:flex;gap:8px;">
+              <button class="action-btn" onclick="rotateText(-90)" style="flex:1;">↺ 90° CCW</button>
+              <button class="action-btn" id="btn-reset-rotation" onclick="rotateText(0)" style="flex:1;">Reset</button>
+              <button class="action-btn" onclick="rotateText(90)" style="flex:1;">↻ 90° CW</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -740,9 +747,12 @@ const state = {
   opacity: 75,
   speed: 3,
   mirror: false,
+  textRotation: 0,
   audioEnabled: true,
   selectedCameraId: null,
   selectedMicId: null,
+  drawings: null,
+  drawInterval: null,
   recordings: [],
 };
 
@@ -866,16 +876,70 @@ function startCountdown() {
 function startRecording() {
   if (!state.stream) return;
   state.recordedChunks = [];
-  const options = { mimeType: 'video/mp4' };
-  try {
-    state.mediaRecorder = new MediaRecorder(state.stream, options);
-  } catch(e) {
-    try {
-      state.mediaRecorder = new MediaRecorder(state.stream, { mimeType: 'video/webm;codecs=vp8,opus' });
-    } catch(e2) {
-      state.mediaRecorder = new MediaRecorder(state.stream);
-    }
+
+  // ── Canvas-based recording ──────────────────────────────────────────
+  // MediaRecorder captures the raw sensor stream which is always landscape.
+  // We draw each video frame onto a correctly-sized/rotated canvas instead,
+  // then record the canvas output — this bakes the correct orientation in.
+
+  const vid = document.getElementById('camera-video');
+  const isPortrait = window.innerHeight > window.innerWidth;
+
+  // Determine output dimensions based on current orientation
+  // Use the video's natural dimensions to avoid guessing
+  const vw = vid.videoWidth || 1280;
+  const vh = vid.videoHeight || 720;
+
+  let canvasW, canvasH, rotation;
+  if (isPortrait) {
+    // Portrait display: output should be taller than wide
+    // Sensor delivers landscape (vw > vh), so we rotate 90°
+    canvasW = vh;   // narrow
+    canvasH = vw;   // tall
+    rotation = 90;
+  } else {
+    // Landscape: output matches sensor naturally, no rotation needed
+    canvasW = vw;
+    canvasH = vh;
+    rotation = 0;
   }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = canvasW;
+  canvas.height = canvasH;
+  const ctx = canvas.getContext('2d');
+
+  // Draw frames at ~30fps
+  state.drawInterval = setInterval(() => {
+    if (vid.readyState < 2) return;
+    ctx.save();
+    if (rotation === 90) {
+      ctx.translate(canvasW / 2, canvasH / 2);
+      ctx.rotate(Math.PI / 2);
+      ctx.drawImage(vid, -vw / 2, -vh / 2, vw, vh);
+    } else {
+      ctx.drawImage(vid, 0, 0, canvasW, canvasH);
+    }
+    ctx.restore();
+  }, 1000 / 30);
+
+  // Capture canvas stream, mix in audio from original stream
+  const canvasStream = canvas.captureStream(30);
+  if (state.audioEnabled) {
+    state.stream.getAudioTracks().forEach(t => canvasStream.addTrack(t));
+  }
+
+  // Pick best available mimeType
+  const mimeTypes = ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
+  let chosenMime = '';
+  for (const m of mimeTypes) {
+    if (MediaRecorder.isTypeSupported(m)) { chosenMime = m; break; }
+  }
+
+  state.mediaRecorder = chosenMime
+    ? new MediaRecorder(canvasStream, { mimeType: chosenMime })
+    : new MediaRecorder(canvasStream);
+
   state.mediaRecorder.ondataavailable = e => {
     if (e.data.size > 0) state.recordedChunks.push(e.data);
   };
@@ -901,6 +965,7 @@ function stopRecording() {
   if (state.mediaRecorder && state.isRecording) {
     state.mediaRecorder.stop();
   }
+  clearInterval(state.drawInterval);
   state.isRecording = false;
   document.getElementById('record-btn').classList.remove('recording');
   document.getElementById('rec-timer').classList.remove('active');
@@ -1088,7 +1153,29 @@ function updateSpeed(v) {
 
 function updateMirror() {
   state.mirror = document.getElementById('tog-mirror').checked;
-  document.getElementById('prompter-text').style.transform = state.mirror ? 'scaleX(-1)' : '';
+  applyTextTransform();
+}
+
+function rotateText(deg) {
+  state.textRotation = deg;
+  applyTextTransform();
+}
+
+function applyTextTransform() {
+  const el = document.getElementById('prompter-text');
+  const transforms = [];
+  if (state.textRotation) transforms.push(`rotate(${state.textRotation}deg)`);
+  if (state.mirror) transforms.push('scaleX(-1)');
+  el.style.transform = transforms.join(' ');
+  // When rotated 90°, swap the scroll axis
+  const container = document.getElementById('prompter-scroll-container');
+  if (state.textRotation === 90 || state.textRotation === -90) {
+    el.style.width = document.getElementById('prompter-overlay').offsetHeight + 'px';
+    el.style.transformOrigin = 'top left';
+  } else {
+    el.style.width = '';
+    el.style.transformOrigin = 'center';
+  }
 }
 
 
