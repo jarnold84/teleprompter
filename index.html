@@ -676,15 +676,7 @@
             <div class="ctrl-label" style="margin-bottom:7px">Video input</div>
             <select id="sel-camera" onchange="changeCamera(this.value)"></select>
           </div>
-          <div>
-            <div class="ctrl-label" style="margin-bottom:7px">Resolution</div>
-            <select id="sel-resolution" onchange="changeResolution(this.value)">
-              <option value="1920x1080">1920 × 1080 (1080p)</option>
-              <option value="1280x720" selected>1280 × 720 (720p)</option>
-              <option value="3840x2160">3840 × 2160 (4K)</option>
-              <option value="640x480">640 × 480 (SD)</option>
-            </select>
-          </div>
+
         </div>
       </div>
 
@@ -752,25 +744,18 @@ const state = {
   audioEnabled: true,
   selectedCameraId: null,
   selectedMicId: null,
-  resolution: { w: 1280, h: 720 },
   recordings: [],
 };
 
 // ─── CAMERA ──────────────────────────────────────────
 async function initCamera() {
   document.getElementById('cam-error').classList.remove('show');
-  const res = state.resolution;
 
-  // Always request landscape dimensions — iOS sensors are physically landscape.
-  // Swapping w/h causes the sensor to crop/zoom. We handle portrait display via CSS transform.
-  const vw = Math.max(res.w, res.h);
-  const vh = Math.min(res.w, res.h);
-
+  // Don't specify width/height — let iOS deliver whatever the sensor
+  // natively prefers for the current orientation. object-fit:cover handles display.
   const constraints = {
     video: {
       facingMode: state.currentFacing,
-      width: { ideal: vw },
-      height: { ideal: vh },
       ...(state.selectedCameraId ? { deviceId: { exact: state.selectedCameraId } } : {})
     },
     audio: state.audioEnabled
@@ -782,31 +767,13 @@ async function initCamera() {
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
     state.stream = stream;
     const vid = document.getElementById('camera-video');
+    vid.style.transform = '';
     vid.srcObject = stream;
     await populateDevices();
     updateCamPill();
-    applyVideoOrientation();
   } catch (e) {
     console.error(e);
     document.getElementById('cam-error').classList.add('show');
-  }
-}
-
-function applyVideoOrientation() {
-  const vid = document.getElementById('camera-video');
-  const isPortrait = window.innerHeight > window.innerWidth;
-
-  if (isPortrait) {
-    // Rotate the landscape stream 90deg to fill portrait screen
-    // Scale it so it fills edge-to-edge without black bars
-    const scaleRatio = window.innerHeight / window.innerWidth;
-    vid.style.transform = `rotate(90deg) scaleX(${scaleRatio})`;
-    vid.style.width = '100%';
-    vid.style.height = '100%';
-  } else {
-    vid.style.transform = '';
-    vid.style.width = '100%';
-    vid.style.height = '100%';
   }
 }
 
@@ -848,12 +815,6 @@ function changeCamera(deviceId) {
 
 function changeMic(deviceId) {
   state.selectedMicId = deviceId;
-  initCamera();
-}
-
-function changeResolution(val) {
-  const [w, h] = val.split('x').map(Number);
-  state.resolution = { w, h };
   initCamera();
 }
 
@@ -1160,11 +1121,10 @@ function switchTab(tab) {
 function handleOrientation() {
   const isLandscape = window.innerWidth > window.innerHeight;
   document.getElementById('orient-pill').textContent = isLandscape ? 'LANDSCAPE' : 'PORTRAIT';
-  applyVideoOrientation();
+  applyPosition();
 }
 window.addEventListener('resize', handleOrientation);
 screen.orientation && screen.orientation.addEventListener('change', () => {
-  // Small delay to let the browser finish resizing after rotation
   setTimeout(handleOrientation, 150);
 });
 handleOrientation();
