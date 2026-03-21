@@ -110,7 +110,7 @@
   /* Recording timer */
   #rec-timer {
     position: absolute;
-    top: 14px;
+    bottom: 14px;
     right: 16px;
     display: none;
     align-items: center;
@@ -531,7 +531,6 @@
     <div id="status-bar">
       <div class="status-pill highlight" id="orient-pill">PORTRAIT</div>
       <div class="status-pill" id="cam-pill">FRONT</div>
-      <button class="status-pill" id="lock-btn" onclick="toggleOrientationLock()" style="background:rgba(200,169,110,0.15);border-color:rgba(200,169,110,0.4);color:var(--accent);cursor:pointer;font-family:'DM Mono',monospace;letter-spacing:0.06em;text-transform:uppercase;font-size:10px;">🔓 LOCK</button>
     </div>
 
     <div id="prompter-controls">
@@ -895,7 +894,7 @@ function startRecording() {
     document.getElementById('rec-time-display').textContent = `${m}:${s}`;
   }, 500);
 
-  if (state.autoScrollWithRec) startScroll();
+  startScroll();
 }
 
 function stopRecording() {
@@ -906,7 +905,7 @@ function stopRecording() {
   document.getElementById('record-btn').classList.remove('recording');
   document.getElementById('rec-timer').classList.remove('active');
   clearInterval(state.recTimerInterval);
-  if (state.autoScrollWithRec) pauseScroll();
+  pauseScroll();
 }
 
 function saveRecording() {
@@ -1118,50 +1117,11 @@ function switchTab(tab) {
 }
 
 // ─── ORIENTATION ─────────────────────────────────────
-let orientationLocked = false;
-
+// ─── ORIENTATION ─────────────────────────────────────
 function updateOrientPill() {
   const isLandscape = window.innerWidth > window.innerHeight;
   document.getElementById('orient-pill').textContent = isLandscape ? 'LANDSCAPE' : 'PORTRAIT';
   applyPosition();
-}
-
-async function toggleOrientationLock() {
-  const btn = document.getElementById('lock-btn');
-
-  if (orientationLocked) {
-    // Unlock
-    try {
-      screen.orientation && screen.orientation.unlock();
-    } catch(e) {}
-    orientationLocked = false;
-    btn.textContent = '🔓 LOCK';
-    btn.style.background = 'rgba(200,169,110,0.15)';
-  } else {
-    // Lock to current orientation
-    const current = window.innerWidth > window.innerHeight ? 'landscape' : 'portrait';
-    const lockType = current === 'landscape' ? 'landscape' : 'portrait';
-    try {
-      if (screen.orientation && screen.orientation.lock) {
-        await screen.orientation.lock(lockType);
-        orientationLocked = true;
-        btn.textContent = '🔒 LOCKED';
-        btn.style.background = 'rgba(200,169,110,0.3)';
-      } else {
-        // screen.orientation.lock not supported — show message
-        btn.textContent = 'N/A';
-        setTimeout(() => { btn.textContent = '🔓 LOCK'; }, 2000);
-      }
-    } catch(e) {
-      // On iOS Safari, lock() requires the app to be in fullscreen (added to home screen)
-      btn.textContent = 'ADD TO HOME';
-      btn.style.fontSize = '9px';
-      setTimeout(() => {
-        btn.textContent = '🔓 LOCK';
-        btn.style.fontSize = '';
-      }, 3000);
-    }
-  }
 }
 
 window.addEventListener('resize', () => setTimeout(updateOrientPill, 100));
