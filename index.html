@@ -47,10 +47,12 @@
   /* Camera */
   #camera-video {
     position: absolute;
-    inset: 0;
+    top: 50%; left: 50%;
     width: 100%; height: 100%;
     object-fit: cover;
-    transform-origin: center;
+    transform-origin: center center;
+    transform: translate(-50%, -50%);
+    transition: transform 0.3s ease;
   }
 
   /* Teleprompter overlay */
@@ -771,6 +773,7 @@ async function initCamera() {
     vid.srcObject = stream;
     await populateDevices();
     updateCamPill();
+    applyCounterRotation();
   } catch (e) {
     console.error(e);
     document.getElementById('cam-error').classList.add('show');
@@ -1118,16 +1121,62 @@ function switchTab(tab) {
 }
 
 // ─── ORIENTATION ─────────────────────────────────────
-function handleOrientation() {
-  const isLandscape = window.innerWidth > window.innerHeight;
+// Keep track of the last known angle to avoid redundant updates
+let lastAngle = 0;
+
+function getOrientationAngle() {
+  // screen.orientation.angle is the most reliable on iOS Safari
+  if (screen.orientation && screen.orientation.angle !== undefined) {
+    return screen.orientation.angle;
+  }
+  // Fallback: window.orientation (deprecated but works on older iOS)
+  if (typeof window.orientation !== 'undefined') {
+    return window.orientation;
+  }
+  return 0;
+}
+
+function applyCounterRotation() {
+  const angle = getOrientationAngle();
+  lastAngle = angle;
+  const vid = document.getElementById('camera-video');
+
+  // Counter-rotate the video by the negative of the device angle
+  // so it always appears upright relative to the ground.
+  // When angle=0 (portrait): no rotation needed
+  // When angle=90 (landscape-left): rotate video -90deg to compensate
+  // When angle=-90 or 270 (landscape-right): rotate video +90deg
+  // When angle=180 (upside-down portrait): rotate video 180deg
+  let counterAngle = -angle;
+
+  // For landscape, the video stream is wider than tall, so after rotating
+  // we also need to scale it up to fill the screen without black bars.
+  let scale = 1;
+  if (angle === 90 || angle === -90 || angle === 270) {
+    // Screen is landscape but we're showing portrait: scale to fill height
+    scale = window.innerHeight / window.innerWidth;
+  }
+
+  vid.style.transform = `translate(-50%, -50%) rotate(${counterAngle}deg) scale(${scale})`;
+
+  // Update orientation pill
+  const isLandscape = (angle === 90 || angle === -90 || angle === 270);
   document.getElementById('orient-pill').textContent = isLandscape ? 'LANDSCAPE' : 'PORTRAIT';
   applyPosition();
 }
-window.addEventListener('resize', handleOrientation);
+
+// Listen for orientation changes via multiple events for maximum iOS compatibility
 screen.orientation && screen.orientation.addEventListener('change', () => {
-  setTimeout(handleOrientation, 150);
+  setTimeout(applyCounterRotation, 150);
 });
-handleOrientation();
+window.addEventListener('orientationchange', () => {
+  setTimeout(applyCounterRotation, 150);
+});
+window.addEventListener('resize', () => {
+  setTimeout(applyCounterRotation, 100);
+});
+
+applyCounterRotation();
 
 // ─── INIT ─────────────────────────────────────────────
 (async function init() {
