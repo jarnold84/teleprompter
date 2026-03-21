@@ -47,12 +47,9 @@
   /* Camera */
   #camera-video {
     position: absolute;
-    top: 50%; left: 50%;
+    inset: 0;
     width: 100%; height: 100%;
     object-fit: cover;
-    transform-origin: center center;
-    transform: translate(-50%, -50%);
-    transition: transform 0.3s ease;
   }
 
   /* Teleprompter overlay */
@@ -532,8 +529,9 @@
     </div>
 
     <div id="status-bar">
-      <div class="status-pill highlight" id="orient-pill">LANDSCAPE</div>
+      <div class="status-pill highlight" id="orient-pill">PORTRAIT</div>
       <div class="status-pill" id="cam-pill">FRONT</div>
+      <button class="status-pill" id="lock-btn" onclick="toggleOrientationLock()" style="background:rgba(200,169,110,0.15);border-color:rgba(200,169,110,0.4);color:var(--accent);cursor:pointer;font-family:'DM Mono',monospace;letter-spacing:0.06em;text-transform:uppercase;font-size:10px;">🔓 LOCK</button>
     </div>
 
     <div id="prompter-controls">
@@ -773,7 +771,6 @@ async function initCamera() {
     vid.srcObject = stream;
     await populateDevices();
     updateCamPill();
-    applyCounterRotation();
   } catch (e) {
     console.error(e);
     document.getElementById('cam-error').classList.add('show');
@@ -1121,62 +1118,55 @@ function switchTab(tab) {
 }
 
 // ─── ORIENTATION ─────────────────────────────────────
-// Keep track of the last known angle to avoid redundant updates
-let lastAngle = 0;
+let orientationLocked = false;
 
-function getOrientationAngle() {
-  // screen.orientation.angle is the most reliable on iOS Safari
-  if (screen.orientation && screen.orientation.angle !== undefined) {
-    return screen.orientation.angle;
-  }
-  // Fallback: window.orientation (deprecated but works on older iOS)
-  if (typeof window.orientation !== 'undefined') {
-    return window.orientation;
-  }
-  return 0;
-}
-
-function applyCounterRotation() {
-  const angle = getOrientationAngle();
-  lastAngle = angle;
-  const vid = document.getElementById('camera-video');
-
-  // Counter-rotate the video by the negative of the device angle
-  // so it always appears upright relative to the ground.
-  // When angle=0 (portrait): no rotation needed
-  // When angle=90 (landscape-left): rotate video -90deg to compensate
-  // When angle=-90 or 270 (landscape-right): rotate video +90deg
-  // When angle=180 (upside-down portrait): rotate video 180deg
-  let counterAngle = -angle;
-
-  // For landscape, the video stream is wider than tall, so after rotating
-  // we also need to scale it up to fill the screen without black bars.
-  let scale = 1;
-  if (angle === 90 || angle === -90 || angle === 270) {
-    // Screen is landscape but we're showing portrait: scale to fill height
-    scale = window.innerHeight / window.innerWidth;
-  }
-
-  vid.style.transform = `translate(-50%, -50%) rotate(${counterAngle}deg) scale(${scale})`;
-
-  // Update orientation pill
-  const isLandscape = (angle === 90 || angle === -90 || angle === 270);
+function updateOrientPill() {
+  const isLandscape = window.innerWidth > window.innerHeight;
   document.getElementById('orient-pill').textContent = isLandscape ? 'LANDSCAPE' : 'PORTRAIT';
   applyPosition();
 }
 
-// Listen for orientation changes via multiple events for maximum iOS compatibility
-screen.orientation && screen.orientation.addEventListener('change', () => {
-  setTimeout(applyCounterRotation, 150);
-});
-window.addEventListener('orientationchange', () => {
-  setTimeout(applyCounterRotation, 150);
-});
-window.addEventListener('resize', () => {
-  setTimeout(applyCounterRotation, 100);
-});
+async function toggleOrientationLock() {
+  const btn = document.getElementById('lock-btn');
 
-applyCounterRotation();
+  if (orientationLocked) {
+    // Unlock
+    try {
+      screen.orientation && screen.orientation.unlock();
+    } catch(e) {}
+    orientationLocked = false;
+    btn.textContent = '🔓 LOCK';
+    btn.style.background = 'rgba(200,169,110,0.15)';
+  } else {
+    // Lock to current orientation
+    const current = window.innerWidth > window.innerHeight ? 'landscape' : 'portrait';
+    const lockType = current === 'landscape' ? 'landscape' : 'portrait';
+    try {
+      if (screen.orientation && screen.orientation.lock) {
+        await screen.orientation.lock(lockType);
+        orientationLocked = true;
+        btn.textContent = '🔒 LOCKED';
+        btn.style.background = 'rgba(200,169,110,0.3)';
+      } else {
+        // screen.orientation.lock not supported — show message
+        btn.textContent = 'N/A';
+        setTimeout(() => { btn.textContent = '🔓 LOCK'; }, 2000);
+      }
+    } catch(e) {
+      // On iOS Safari, lock() requires the app to be in fullscreen (added to home screen)
+      btn.textContent = 'ADD TO HOME';
+      btn.style.fontSize = '9px';
+      setTimeout(() => {
+        btn.textContent = '🔓 LOCK';
+        btn.style.fontSize = '';
+      }, 3000);
+    }
+  }
+}
+
+window.addEventListener('resize', () => setTimeout(updateOrientPill, 100));
+screen.orientation && screen.orientation.addEventListener('change', () => setTimeout(updateOrientPill, 150));
+updateOrientPill();
 
 // ─── INIT ─────────────────────────────────────────────
 (async function init() {
