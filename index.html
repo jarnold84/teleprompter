@@ -875,82 +875,24 @@ function startRecording() {
   if (!state.stream) return;
   state.recordedChunks = [];
 
-  const vid = document.getElementById('camera-video');
-  const isFront = state.currentFacing === 'user';
-
-  // Sensor delivers 480×640 in portrait (width < height).
-  // In landscape the sensor may still report 480×640 or flip to 640×480 —
-  // we read actual values and use orientation angle to decide what to do.
-  const sensorW = vid.videoWidth  || 480;
-  const sensorH = vid.videoHeight || 640;
-  const angle = (screen.orientation && screen.orientation.angle !== undefined)
-    ? screen.orientation.angle : 0;
-
-  // angle=0   → portrait  (phone upright)
-  // angle=90  → landscape rotated CCW
-  // angle=270 → landscape rotated CW  (confirmed on your device)
-  // angle=180 → upside-down portrait
-  const isLandscape = (angle === 90 || angle === 270);
-
-  let canvasW, canvasH, rotateDeg;
-
-  if (!isLandscape) {
-    // Portrait: sensor is already portrait (480×640), draw straight
-    canvasW = sensorW;   // 480
-    canvasH = sensorH;   // 640
-    rotateDeg = 0;
-  } else {
-    // Landscape: we want a wide output (640×480).
-    // If sensor still reports 480×640 we rotate 90° to produce 640×480.
-    // If sensor already flipped to 640×480 we draw straight.
-    if (sensorW < sensorH) {
-      // Sensor is still portrait-shaped, rotate to landscape
-      canvasW = sensorH;  // 640
-      canvasH = sensorW;  // 480
-      rotateDeg = angle === 270 ? 90 : -90;
-    } else {
-      // Sensor already landscape
-      canvasW = sensorW;
-      canvasH = sensorH;
-      rotateDeg = 0;
-    }
-  }
-
-  const canvas = document.createElement('canvas');
-  canvas.width  = canvasW;
-  canvas.height = canvasH;
-  const ctx = canvas.getContext('2d');
-
-  state.drawInterval = setInterval(() => {
-    if (vid.readyState < 2) return;
-    ctx.save();
-    ctx.clearRect(0, 0, canvasW, canvasH);
-    ctx.translate(canvasW / 2, canvasH / 2);
-    if (rotateDeg) ctx.rotate(rotateDeg * Math.PI / 180);
-    // Mirror front camera so saved video matches what user saw
-    if (isFront) ctx.scale(-1, 1);
-    // After rotation the draw dimensions swap if rotated
-    if (rotateDeg === 90 || rotateDeg === -90) {
-      ctx.drawImage(vid, -sensorH / 2, -sensorW / 2, sensorH, sensorW);
-    } else {
-      ctx.drawImage(vid, -sensorW / 2, -sensorH / 2, sensorW, sensorH);
-    }
-    ctx.restore();
-  }, 1000 / 30);
-
-  const canvasStream = canvas.captureStream(30);
-  if (state.audioEnabled) {
-    state.stream.getAudioTracks().forEach(t => canvasStream.addTrack(t));
-  }
-
-  const mimeTypes = ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
+  // Record the raw camera stream directly.
+  // canvas.captureStream() is not supported on iOS Safari, and produces
+  // WebM which iOS cannot save or play. Recording the raw stream produces
+  // a proper MP4 with iOS rotation metadata embedded — platforms like
+  // Instagram, YouTube, and LinkedIn read that metadata and display correctly.
+  const mimeTypes = ['video/mp4', 'video/mp4;codecs=avc1', ''];
   let chosenMime = '';
   for (const m of mimeTypes) {
-    if (MediaRecorder.isTypeSupported(m)) { chosenMime = m; break; }
+    if (m === '' || MediaRecorder.isTypeSupported(m)) { chosenMime = m; break; }
   }
-  state.mediaRecorder = chosenMime
-    ? new MediaRecorder(canvasStream, { mimeType: chosenMime })
-    : new MediaRecorder(canvasStream);
+
+  try {
+    state.mediaRecorder = chosenMime
+      ? new MediaRecorder(state.stream, { mimeType: chosenMime })
+      : new MediaRecorder(state.stream);
+  } catch(e) {
+    state.mediaRecorder = new MediaRecorder(state.stream);
+  }
 
   state.mediaRecorder.ondataavailable = e => {
     if (e.data.size > 0) state.recordedChunks.push(e.data);
@@ -977,7 +919,6 @@ function stopRecording() {
   if (state.mediaRecorder && state.isRecording) {
     state.mediaRecorder.stop();
   }
-  clearInterval(state.drawInterval);
   state.isRecording = false;
   document.getElementById('record-btn').classList.remove('recording');
   document.getElementById('rec-timer').classList.remove('active');
