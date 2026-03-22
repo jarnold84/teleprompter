@@ -1192,6 +1192,8 @@ function updateOrientPill() {
 screen.orientation && screen.orientation.addEventListener('change', () => setTimeout(updateOrientPill, 100));
 window.addEventListener('resize', () => setTimeout(updateOrientPill, 100));
 updateOrientPill();
+
+function updateCountdown(v) {
   state.countdownVal = +v;
   document.getElementById('val-countdown').textContent = v;
 }
