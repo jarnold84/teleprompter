@@ -848,14 +848,14 @@ document.getElementById('record-btn').addEventListener('click', () => {
 });
 
 function startCountdown() {
-  // Reinit camera at orientation-appropriate resolution before we start.
-  // Portrait: 720×1280 (9:16). Landscape: 1280×720 (16:9).
-  // Using 'ideal' so iOS falls back gracefully if exact res not available.
   const angle = screen.orientation ? screen.orientation.angle : 0;
   const isLandscape = (angle === 90 || angle === 270);
+
+  // Only override resolution for landscape (16:9).
+  // Portrait uses whatever the sensor naturally delivers — it works correctly as-is.
   const reinit = isLandscape
     ? initCamera(1280, 720)
-    : initCamera(720, 1280);
+    : initCamera();
 
   reinit.then(() => {
     let n = state.countdownVal;
