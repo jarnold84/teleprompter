@@ -627,14 +627,14 @@
 
         <div class="ctrl-row">
           <span class="ctrl-label">Box width</span>
-          <input type="range" id="sl-box-w" min="20" max="100" value="70" oninput="updateBoxWidth(this.value)">
-          <span class="ctrl-value" id="val-box-w">70%</span>
+          <input type="range" id="sl-box-w" min="20" max="100" value="40" oninput="updateBoxWidth(this.value)">
+          <span class="ctrl-value" id="val-box-w">40%</span>
         </div>
 
         <div class="ctrl-row">
           <span class="ctrl-label">Box height</span>
-          <input type="range" id="sl-box-h" min="10" max="80" value="35" oninput="updateBoxHeight(this.value)">
-          <span class="ctrl-value" id="val-box-h">35%</span>
+          <input type="range" id="sl-box-h" min="10" max="80" value="40" oninput="updateBoxHeight(this.value)">
+          <span class="ctrl-value" id="val-box-h">40%</span>
         </div>
 
         <div class="ctrl-row">
@@ -645,8 +645,8 @@
 
         <div class="ctrl-row">
           <span class="ctrl-label">Scroll speed</span>
-          <input type="range" id="sl-speed" min="1" max="10" value="3" oninput="updateSpeed(this.value)">
-          <span class="ctrl-value" id="val-speed">3</span>
+          <input type="range" id="sl-speed" min="1" max="10" value="5" oninput="updateSpeed(this.value)">
+          <span class="ctrl-value" id="val-speed">5</span>
         </div>
       </div>
 
@@ -708,8 +708,8 @@
         <div class="section-label">Countdown</div>
         <div class="ctrl-row">
           <span class="ctrl-label">Seconds before record</span>
-          <input type="range" id="sl-countdown" min="0" max="10" value="5" oninput="updateCountdown(this.value)">
-          <span class="ctrl-value" id="val-countdown">5</span>
+          <input type="range" id="sl-countdown" min="0" max="10" value="3" oninput="updateCountdown(this.value)">
+          <span class="ctrl-value" id="val-countdown">3</span>
         </div>
       </div>
 
@@ -733,7 +733,7 @@ const state = {
   isRecording: false,
   recStartTime: null,
   recTimerInterval: null,
-  countdownVal: 5,
+  countdownVal: 3,
   countdownTimer: null,
   scrollInterval: null,
   scrollPos: 0,
@@ -741,10 +741,10 @@ const state = {
   currentFacing: 'user',
   position: 'top-center',
   fontSize: 24,
-  boxW: 70,
-  boxH: 35,
+  boxW: 40,
+  boxH: 40,
   opacity: 75,
-  speed: 3,
+  speed: 5,
   mirror: false,
   textRotation: 0,
   audioEnabled: true,
@@ -998,7 +998,7 @@ function startScroll() {
   state.scrollInterval = setInterval(() => {
     const maxScroll = text.scrollHeight - container.clientHeight;
     if (maxScroll <= 0) return;
-    state.scrollPos = Math.min(state.scrollPos + state.speed * 0.4, maxScroll);
+    state.scrollPos = Math.min(state.scrollPos + state.speed * 0.2, maxScroll);
     container.scrollTop = state.scrollPos;
     const pct = (state.scrollPos / maxScroll) * 100;
     progress.style.height = pct + '%';
@@ -1143,10 +1143,7 @@ function updateOrientPill() {
   const isLandscape = (angle === 90 || angle === 270);
   const pill = document.getElementById('orient-pill');
   if (pill) pill.textContent = isLandscape ? 'LANDSCAPE' : 'PORTRAIT';
-  applyPosition();
 }
-screen.orientation && screen.orientation.addEventListener('change', () => setTimeout(updateOrientPill, 100));
-window.addEventListener('resize', () => setTimeout(updateOrientPill, 100));
 updateOrientPill();
 
 function updateCountdown(v) {
@@ -1172,12 +1169,34 @@ function switchTab(tab) {
   document.getElementById('panel-title-label').textContent = labels[tab] || tab;
 }
 
+// ─── ORIENTATION-AWARE DEFAULT POSITION ──────────────
+function getDefaultPosition() {
+  const angle = screen.orientation ? screen.orientation.angle : 0;
+  if (angle === 90)  return 'middle-left';   // rotated CCW — camera on left
+  if (angle === 270) return 'middle-right';  // rotated CW  — camera on right
+  return 'top-center';                       // portrait — camera at top
+}
+
+function applyDefaultPosition() {
+  updateOrientPill();
+  const pos = getDefaultPosition();
+  state.position = pos;
+  document.querySelectorAll('.pos-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.pos === pos);
+  });
+  applyPosition();
+}
+
+screen.orientation && screen.orientation.addEventListener('change', () => {
+  setTimeout(applyDefaultPosition, 150);
+});
+window.addEventListener('resize', () => setTimeout(applyDefaultPosition, 150));
+
 // ─── INIT ─────────────────────────────────────────────
 (async function init() {
   document.getElementById('prompter-overlay').style.backgroundColor = `rgba(30,30,30,0.75)`;
   document.getElementById('prompter-text').style.fontSize = '24px';
-  state.position = 'top-center';
-  applyPosition();
+  applyDefaultPosition();
   await initCamera();
 })();
 </script>
