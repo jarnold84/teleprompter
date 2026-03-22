@@ -1172,15 +1172,33 @@ function switchTab(tab) {
 // ─── ORIENTATION-AWARE DEFAULT POSITION ──────────────
 function getDefaultPosition() {
   const angle = screen.orientation ? screen.orientation.angle : 0;
-  if (angle === 90)  return 'middle-left';   // rotated CCW — camera on left
-  if (angle === 270) return 'middle-right';  // rotated CW  — camera on right
-  return 'top-center';                       // portrait — camera at top
+  if (angle === 90)  return 'middle-left';
+  if (angle === 270) return 'middle-right';
+  return 'top-center';
+}
+
+function getDefaultBoxDimensions() {
+  const angle = screen.orientation ? screen.orientation.angle : 0;
+  const isLandscape = (angle === 90 || angle === 270);
+  // Portrait: narrow width (fits beside face), taller height
+  // Landscape: wider width (fills more of the short side), shorter height
+  return isLandscape
+    ? { w: 35, h: 80 }
+    : { w: 70, h: 40 };
 }
 
 function applyDefaultPosition() {
   updateOrientPill();
   const pos = getDefaultPosition();
+  const dims = getDefaultBoxDimensions();
   state.position = pos;
+  state.boxW = dims.w;
+  state.boxH = dims.h;
+  // Sync sliders to new values
+  const wSlider = document.getElementById('sl-box-w');
+  const hSlider = document.getElementById('sl-box-h');
+  if (wSlider) { wSlider.value = dims.w; document.getElementById('val-box-w').textContent = dims.w + '%'; }
+  if (hSlider) { hSlider.value = dims.h; document.getElementById('val-box-h').textContent = dims.h + '%'; }
   document.querySelectorAll('.pos-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.pos === pos);
   });
