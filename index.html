@@ -755,13 +755,16 @@ const state = {
 };
 
 // ─── CAMERA ──────────────────────────────────────────
-async function initCamera() {
+async function initCamera(widthOverride, heightOverride) {
   document.getElementById('cam-error').classList.remove('show');
+  const videoConstraints = {
+    facingMode: state.currentFacing,
+    ...(state.selectedCameraId ? { deviceId: { exact: state.selectedCameraId } } : {}),
+    ...(widthOverride  ? { width:  { ideal: widthOverride  } } : {}),
+    ...(heightOverride ? { height: { ideal: heightOverride } } : {}),
+  };
   const constraints = {
-    video: {
-      facingMode: state.currentFacing,
-      ...(state.selectedCameraId ? { deviceId: { exact: state.selectedCameraId } } : {})
-    },
+    video: videoConstraints,
     audio: state.audioEnabled
       ? (state.selectedMicId ? { deviceId: { exact: state.selectedMicId } } : true)
       : false
@@ -845,30 +848,40 @@ document.getElementById('record-btn').addEventListener('click', () => {
 });
 
 function startCountdown() {
-  let n = state.countdownVal;
-  if (n === 0) { startRecording(); return; }
-  const overlay = document.getElementById('countdown-overlay');
-  const numEl = document.getElementById('countdown-num');
-  overlay.classList.add('active');
-  numEl.textContent = n;
-  // Restart animation
-  numEl.style.animation = 'none';
-  void numEl.offsetWidth;
-  numEl.style.animation = 'pulse-count 1s ease-in-out';
+  // Reinit camera at orientation-appropriate resolution before we start.
+  // Portrait: 720×1280 (9:16). Landscape: 1280×720 (16:9).
+  // Using 'ideal' so iOS falls back gracefully if exact res not available.
+  const angle = screen.orientation ? screen.orientation.angle : 0;
+  const isLandscape = (angle === 90 || angle === 270);
+  const reinit = isLandscape
+    ? initCamera(1280, 720)
+    : initCamera(720, 1280);
 
-  state.countdownTimer = setInterval(() => {
-    n--;
-    if (n <= 0) {
-      clearInterval(state.countdownTimer);
-      overlay.classList.remove('active');
-      startRecording();
-    } else {
-      numEl.textContent = n;
-      numEl.style.animation = 'none';
-      void numEl.offsetWidth;
-      numEl.style.animation = 'pulse-count 1s ease-in-out';
-    }
-  }, 1000);
+  reinit.then(() => {
+    let n = state.countdownVal;
+    if (n === 0) { startRecording(); return; }
+    const overlay = document.getElementById('countdown-overlay');
+    const numEl = document.getElementById('countdown-num');
+    overlay.classList.add('active');
+    numEl.textContent = n;
+    numEl.style.animation = 'none';
+    void numEl.offsetWidth;
+    numEl.style.animation = 'pulse-count 1s ease-in-out';
+
+    state.countdownTimer = setInterval(() => {
+      n--;
+      if (n <= 0) {
+        clearInterval(state.countdownTimer);
+        overlay.classList.remove('active');
+        startRecording();
+      } else {
+        numEl.textContent = n;
+        numEl.style.animation = 'none';
+        void numEl.offsetWidth;
+        numEl.style.animation = 'pulse-count 1s ease-in-out';
+      }
+    }, 1000);
+  });
 }
 
 function startRecording() {
@@ -936,6 +949,8 @@ function saveRecording() {
   renderRecordings();
   openPanel('camera');
   switchTab('camera');
+  // Reinit camera back to default (no explicit constraints) for preview
+  initCamera();
 }
 
 function downloadClip(index) {
