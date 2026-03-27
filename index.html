@@ -647,8 +647,8 @@
 
         <div class="ctrl-row">
           <span class="ctrl-label">Scroll speed</span>
-          <input type="range" id="sl-speed" min="1" max="10" value="4" oninput="updateSpeed(this.value)">
-          <span class="ctrl-value" id="val-speed">4</span>
+          <input type="range" id="sl-speed" min="1" max="10" value="5" oninput="updateSpeed(this.value)">
+          <span class="ctrl-value" id="val-speed">5</span>
         </div>
       </div>
 
@@ -746,7 +746,7 @@ const state = {
   boxW: 40,
   boxH: 40,
   opacity: 75,
-  speed: 4,
+  speed: 5,
   mirror: false,
   textRotation: 0,
   audioEnabled: true,
@@ -890,30 +890,25 @@ function startRecording() {
   if (!state.stream) return;
   state.recordedChunks = [];
 
-  // Record the raw camera stream directly.
-  // canvas.captureStream() is not supported on iOS Safari, and produces
-  // WebM which iOS cannot save or play. Recording the raw stream produces
-  // a proper MP4 with iOS rotation metadata embedded — platforms like
-  // Instagram, YouTube, and LinkedIn read that metadata and display correctly.
-  const mimeTypes = ['video/mp4', 'video/mp4;codecs=avc1', ''];
-  let chosenMime = '';
-  for (const m of mimeTypes) {
-    if (m === '' || MediaRecorder.isTypeSupported(m)) { chosenMime = m; break; }
-  }
-
+  // Don't specify mimeType — let iOS Safari choose its native format.
+  // Forcing video/mp4 can cause keyframe issues on some devices.
+  // iOS will use its preferred codec automatically and produce a valid MP4.
   try {
-    state.mediaRecorder = chosenMime
-      ? new MediaRecorder(state.stream, { mimeType: chosenMime })
-      : new MediaRecorder(state.stream);
-  } catch(e) {
     state.mediaRecorder = new MediaRecorder(state.stream);
+  } catch(e) {
+    console.error('MediaRecorder init failed:', e);
+    return;
   }
 
   state.mediaRecorder.ondataavailable = e => {
-    if (e.data.size > 0) state.recordedChunks.push(e.data);
+    if (e.data && e.data.size > 0) state.recordedChunks.push(e.data);
   };
   state.mediaRecorder.onstop = saveRecording;
-  state.mediaRecorder.start(100);
+
+  // No timeslice argument — MediaRecorder buffers everything and encodes
+  // in one pass when stop() is called. Periodic timeslices cause CPU spikes
+  // every N ms that drop frames and create the stuttering effect.
+  state.mediaRecorder.start();
   state.isRecording = true;
   state.recStartTime = Date.now();
 
@@ -931,9 +926,12 @@ function startRecording() {
 }
 
 function stopRecording() {
-  if (state.mediaRecorder && state.isRecording) {
+  if (!state.mediaRecorder || !state.isRecording) return;
+  // Request any final buffered data before stopping
+  state.mediaRecorder.requestData();
+  setTimeout(() => {
     state.mediaRecorder.stop();
-  }
+  }, 150);
   state.isRecording = false;
   document.getElementById('record-btn').classList.remove('recording');
   document.getElementById('rec-timer').classList.remove('active');
@@ -942,17 +940,19 @@ function stopRecording() {
 }
 
 function saveRecording() {
-  const mimeType = state.mediaRecorder.mimeType || 'video/mp4';
-  const ext = mimeType.includes('webm') ? 'webm' : 'mp4';
-  const blob = new Blob(state.recordedChunks, { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const ts = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-  state.recordings.push({ url, ts, ext, blob });
-  renderRecordings();
-  openPanel('camera');
-  switchTab('camera');
-  // Reinit camera back to default (no explicit constraints) for preview
-  initCamera();
+  // Small delay to ensure all ondataavailable callbacks have fired
+  setTimeout(() => {
+    const mimeType = state.mediaRecorder.mimeType || 'video/mp4';
+    const ext = mimeType.includes('webm') ? 'webm' : 'mp4';
+    const blob = new Blob(state.recordedChunks, { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const ts = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    state.recordings.push({ url, ts, ext, blob });
+    renderRecordings();
+    openPanel('camera');
+    switchTab('camera');
+    initCamera();
+  }, 300);
 }
 
 function downloadClip(index) {
