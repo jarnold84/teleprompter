@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<link rel="manifest" href="manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-fullscreen">
 <meta name="apple-mobile-web-app-title" content="Scrollcast">
@@ -917,13 +918,15 @@ function startRecording() {
     if (state.mediaRecorder && state.mediaRecorder.state === 'recording') {
       state.mediaRecorder.requestData();
     }
-  }, 10000);
+  }, 5000);
 
   state.isRecording = true;
   state.recStartTime = Date.now();
 
   document.getElementById('record-btn').classList.add('recording');
   document.getElementById('rec-timer').classList.add('active');
+
+  const MAX_RECORD_SECONDS = null; // No hard limit — see recording tips in README
 
   state.recTimerInterval = setInterval(() => {
     const elapsed = Math.floor((Date.now() - state.recStartTime) / 1000);
@@ -934,6 +937,8 @@ function startRecording() {
 
   startScroll();
 }
+
+
 
 function stopRecording() {
   if (!state.mediaRecorder || !state.isRecording) return;
