@@ -753,6 +753,7 @@ const state = {
   selectedCameraId: null,
   selectedMicId: null,
   drawInterval: null,
+  flushInterval: null,
   recordings: [],
 };
 
@@ -905,10 +906,18 @@ function startRecording() {
   };
   state.mediaRecorder.onstop = saveRecording;
 
-  // No timeslice argument — MediaRecorder buffers everything and encodes
-  // in one pass when stop() is called. Periodic timeslices cause CPU spikes
-  // every N ms that drop frames and create the stuttering effect.
+  // Start with no timeslice — avoids encoding spikes that cause frame drops.
+  // Instead we manually flush the buffer every 10s with requestData().
+  // This prevents iOS Safari's ~20s buffer ceiling from freezing the recording
+  // while keeping the encoder running uninterrupted between flushes.
   state.mediaRecorder.start();
+
+  state.flushInterval = setInterval(() => {
+    if (state.mediaRecorder && state.mediaRecorder.state === 'recording') {
+      state.mediaRecorder.requestData();
+    }
+  }, 10000);
+
   state.isRecording = true;
   state.recStartTime = Date.now();
 
@@ -927,7 +936,7 @@ function startRecording() {
 
 function stopRecording() {
   if (!state.mediaRecorder || !state.isRecording) return;
-  // Request any final buffered data before stopping
+  clearInterval(state.flushInterval);
   state.mediaRecorder.requestData();
   setTimeout(() => {
     state.mediaRecorder.stop();
