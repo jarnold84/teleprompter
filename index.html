@@ -890,6 +890,7 @@ function startCountdown() {
 function startRecording() {
   if (!state.stream) return;
   state.recordedChunks = [];
+  rewindScroll();
 
   // Don't specify mimeType — let iOS Safari choose its native format.
   // Forcing video/mp4 can cause keyframe issues on some devices.
