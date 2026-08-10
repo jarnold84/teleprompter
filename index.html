@@ -9,6 +9,8 @@
 <meta name="apple-mobile-web-app-title" content="Scrollcast">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <title>Scrollcast — iOS Video Teleprompter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;1,9..144,300&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -62,8 +64,11 @@
     align-items: flex-start;
     justify-content: flex-start;
     pointer-events: none;
-    transition: all 0.3s ease;
+    /* Only animate cheap, composited properties. Transitioning `all` re-animated
+       top/left/width/height on every slider drag and every resize event. */
+    transition: background-color 0.2s ease;
     overflow: hidden;
+    contain: layout paint style;
   }
 
   #prompter-scroll-container {
@@ -71,6 +76,21 @@
     height: 100%;
     overflow: hidden;
     position: relative;
+    /* Swipe-to-scroll target. The overlay itself stays click-through. */
+    pointer-events: auto;
+    touch-action: none;
+    overscroll-behavior: contain;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    cursor: grab;
+  }
+  #prompter-scroll-container.dragging { cursor: grabbing; }
+
+  /* The element that actually moves. Transform-only => composited, no layout. */
+  #prompter-track {
+    will-change: transform;
+    transform: translate3d(0, 0, 0);
   }
 
   #prompter-text {
@@ -491,17 +511,43 @@
   }
   .status-pill.highlight { color: var(--accent2); border-color: rgba(126,184,200,0.3); }
 
-  /* Scrollbar progress */
+  /* Scrollbar progress — scaleY instead of height so it composites (no layout) */
   #scroll-progress {
     position: absolute;
     left: 0; top: 0;
     width: 3px;
-    height: 0%;
+    height: 100%;
     background: var(--accent);
     opacity: 0.7;
     z-index: 35;
-    transition: height 0.1s linear;
+    transform-origin: 0 0;
+    transform: scaleY(0);
+    will-change: transform;
   }
+
+  /* Toast */
+  #toast {
+    position: absolute;
+    left: 50%;
+    bottom: 66px;
+    transform: translateX(-50%);
+    max-width: 82%;
+    background: rgba(0,0,0,0.82);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 14px;
+    border-radius: 20px;
+    font-size: 11px;
+    line-height: 1.5;
+    text-align: center;
+    z-index: 60;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  #toast.show { opacity: 1; }
+
+  #rec-size { color: var(--text-dim); }
 </style>
 </head>
 <body>
@@ -518,7 +564,9 @@
     <div id="prompter-overlay">
       <div id="scroll-progress"></div>
       <div id="prompter-scroll-container">
-        <div id="prompter-text"></div>
+        <div id="prompter-track">
+          <div id="prompter-text"></div>
+        </div>
       </div>
     </div>
 
@@ -529,7 +577,10 @@
     <div id="rec-timer">
       <div id="rec-dot"></div>
       <span id="rec-time-display">00:00</span>
+      <span id="rec-size"></span>
     </div>
+
+    <div id="toast"></div>
 
     <div id="status-bar">
       <div class="status-pill highlight" id="orient-pill">PORTRAIT</div>
@@ -708,6 +759,18 @@
       </div>
 
       <div>
+        <div class="section-label">Recording Quality</div>
+        <div class="ctrl-group">
+          <select id="sel-quality" onchange="updateQuality(this.value)">
+            <option value="high">High — best image, largest files</option>
+            <option value="balanced" selected>Balanced — recommended</option>
+            <option value="long">Long take — smallest files</option>
+          </select>
+          <p style="font-size:11px;color:var(--text-dim);line-height:1.5;" id="quality-note"></p>
+        </div>
+      </div>
+
+      <div>
         <div class="section-label">Countdown</div>
         <div class="ctrl-row">
           <span class="ctrl-label">Seconds before record</span>
@@ -721,6 +784,7 @@
         <div id="recordings-list" style="display:flex;flex-direction:column;gap:8px;">
           <p style="font-size:12px;color:var(--text-dim);">Recordings will appear here after you stop.</p>
         </div>
+        <p style="font-size:11px;color:var(--text-dim);line-height:1.5;margin-top:8px;" id="storage-note"></p>
       </div>
     </div>
 
@@ -732,15 +796,18 @@
 const state = {
   stream: null,
   mediaRecorder: null,
-  recordedChunks: [],
   isRecording: false,
   recStartTime: null,
   recTimerInterval: null,
   countdownVal: 3,
   countdownTimer: null,
-  scrollInterval: null,
   scrollPos: 0,
+  maxScroll: 0,
   isScrolling: false,
+  dragging: false,
+  fling: 0,
+  rafId: null,
+  lastFrameT: 0,
   currentFacing: 'user',
   position: 'top-center',
   fontSize: 24,
@@ -753,10 +820,32 @@ const state = {
   audioEnabled: true,
   selectedCameraId: null,
   selectedMicId: null,
-  drawInterval: null,
+  quality: 'balanced',
   flushInterval: null,
+  sink: null,
+  wakeLock: null,
   recordings: [],
 };
+
+// Hot DOM refs — resolved once instead of on every animation frame.
+const trackEl    = document.getElementById('prompter-track');
+const textEl     = document.getElementById('prompter-text');
+const scrollEl   = document.getElementById('prompter-scroll-container');
+const progressEl = document.getElementById('scroll-progress');
+const toastEl    = document.getElementById('toast');
+
+let toastTimer = null;
+function toast(msg, ms = 2600) {
+  toastEl.textContent = msg;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms);
+}
+
+function fmtBytes(n) {
+  if (!n) return '';
+  return n >= 1e9 ? (n / 1e9).toFixed(2) + ' GB' : Math.round(n / 1e6) + ' MB';
+}
 
 // ─── CAMERA ──────────────────────────────────────────
 async function initCamera(widthOverride, heightOverride) {
@@ -812,24 +901,39 @@ async function populateDevices() {
   } catch(e) { console.warn('Device enumeration failed', e); }
 }
 
+// Swapping the camera/mic tears down the stream MediaRecorder is attached to,
+// which silently kills the take. Block it while recording.
+function blockedWhileRecording() {
+  if (!state.isRecording) return false;
+  toast('Stop the recording before changing camera or audio.');
+  return true;
+}
+
 function flipCamera() {
+  if (blockedWhileRecording()) return;
   state.currentFacing = state.currentFacing === 'user' ? 'environment' : 'user';
   state.selectedCameraId = null;
   initCamera();
 }
 
 function changeCamera(deviceId) {
+  if (blockedWhileRecording()) return;
   state.selectedCameraId = deviceId;
   state.currentFacing = undefined;
   initCamera();
 }
 
 function changeMic(deviceId) {
+  if (blockedWhileRecording()) return;
   state.selectedMicId = deviceId;
   initCamera();
 }
 
 function updateAudioEnabled() {
+  if (blockedWhileRecording()) {
+    document.getElementById('tog-audio').checked = state.audioEnabled;
+    return;
+  }
   state.audioEnabled = document.getElementById('tog-audio').checked;
   initCamera();
 }
@@ -842,7 +946,182 @@ function updateCamPill() {
   if (vid) vid.style.transform = state.currentFacing === 'user' ? 'scaleX(-1)' : '';
 }
 
+// ─── RECORDING STORAGE ───────────────────────────────
+// Video is streamed to disk (Origin Private File System) as it is encoded
+// instead of being held in an in-memory chunk array. Holding ~4 Mbps of video
+// in RAM is what made takes over 3–5 minutes die before they could be saved.
+// Peak memory here is one flush interval (~1–3 MB) regardless of take length.
+const REC_DIR = 'scrollcast-recordings';
+
+// The container the browser actually chose decides the file extension. Getting
+// this wrong writes a .mp4 that is really a webm, which some players reject.
+function extForMime(mime) {
+  const m = (mime || '').toLowerCase();
+  if (m.includes('webm')) return 'webm';
+  if (m.includes('matroska')) return 'mkv';
+  if (m.includes('quicktime')) return 'mov';
+  return 'mp4';
+}
+
+const SINK_WORKER_SRC = `
+// Sync access handles write in place and can be flushed, so bytes survive a
+// crash. They are worker-only, hence this worker.
+let handle = null, offset = 0;
+async function maybe(v) { return (v && typeof v.then === 'function') ? await v : v; }
+self.onmessage = async (e) => {
+  const m = e.data;
+  try {
+    if (m.type === 'open') {
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle(m.dir, { create: true });
+      const fh = await dir.getFileHandle(m.name, { create: true });
+      handle = await maybe(fh.createSyncAccessHandle());
+      await maybe(handle.truncate(0));
+      offset = 0;
+      self.postMessage({ type: 'opened' });
+    } else if (m.type === 'write') {
+      const buf = new Uint8Array(m.buffer);
+      await maybe(handle.write(buf, { at: offset }));
+      offset += buf.byteLength;
+      await maybe(handle.flush());
+      self.postMessage({ type: 'wrote', bytes: offset });
+    } else if (m.type === 'close') {
+      if (handle) { await maybe(handle.flush()); await maybe(handle.close()); handle = null; }
+      self.postMessage({ type: 'closed', bytes: offset });
+    }
+  } catch (err) {
+    self.postMessage({ type: 'error', message: String((err && err.message) || err), op: m.type });
+  }
+};
+`;
+
+async function getRecDir(create = true) {
+  if (!navigator.storage || !navigator.storage.getDirectory) return null;
+  const root = await navigator.storage.getDirectory();
+  return await root.getDirectoryHandle(REC_DIR, { create });
+}
+
+function diskSinkSupported() {
+  return !!(window.Worker && navigator.storage && navigator.storage.getDirectory);
+}
+
+// Falls back to the old in-memory behaviour if anything about the disk path
+// is unavailable — short takes keep working even on browsers without OPFS.
+function memorySink(name, mime) {
+  return {
+    kind: 'memory', name, bytes: 0, chunks: [],
+    write(blob) { this.bytes += blob.size; this.chunks.push(blob); },
+    async finish() { return new Blob(this.chunks, { type: mime }); },
+    async discard() { this.chunks = []; },
+  };
+}
+
+async function createSink(name, mime) {
+  if (!diskSinkSupported()) return memorySink(name, mime);
+  let worker, workerUrl;
+  try {
+    // The worker writes the file but the main thread has to read it back at the
+    // end. Prove both sides work before committing the take to disk, otherwise
+    // we could record perfectly and then be unable to produce the clip.
+    if (!(await getRecDir())) throw new Error('no recordings directory');
+
+    workerUrl = URL.createObjectURL(new Blob([SINK_WORKER_SRC], { type: 'text/javascript' }));
+    worker = new Worker(workerUrl);
+    const q = [];
+    worker.onmessage = (e) => {
+      const p = q.shift();
+      if (!p) return;
+      if (e.data && e.data.type === 'error') p.reject(new Error(e.data.message));
+      else p.resolve(e.data);
+    };
+    worker.onerror = () => { const p = q.shift(); if (p) p.reject(new Error('sink worker crashed')); };
+    const send = (msg, transfer) => new Promise((resolve, reject) => {
+      q.push({ resolve, reject });
+      worker.postMessage(msg, transfer || []);
+    });
+
+    await send({ type: 'open', dir: REC_DIR, name });
+
+    let queue = Promise.resolve();
+    return {
+      kind: 'disk', name, bytes: 0, broken: false, fallbackChunks: [],
+      write(blob) {
+        this.bytes += blob.size;
+        if (this.broken) { this.fallbackChunks.push(blob); return; }
+        queue = queue.then(async () => {
+          // Re-check inside the queue: a write queued before an earlier one
+          // failed must also divert, or it would land at the failed chunk's
+          // offset and put the file out of order.
+          if (this.broken) { this.fallbackChunks.push(blob); return; }
+          const buf = await blob.arrayBuffer();
+          await send({ type: 'write', buffer: buf }, [buf]);
+        }).catch((err) => {
+          console.warn('Disk write failed, buffering remainder in memory:', err);
+          if (!this.broken) toast('Device storage is full — finish this take soon.', 6000);
+          this.broken = true;
+          this.fallbackChunks.push(blob);
+        });
+      },
+      async finish() {
+        try { await queue; } catch (e) { /* already handled above */ }
+        try { await send({ type: 'close' }); } catch (e) { console.warn(e); }
+        worker.terminate();
+        URL.revokeObjectURL(workerUrl);
+        const dir = await getRecDir();
+        const file = await (await dir.getFileHandle(name)).getFile();
+        if (this.fallbackChunks.length) return new Blob([file, ...this.fallbackChunks], { type: mime });
+        // Blob-wrapping a file-backed Blob references it, it does not copy the
+        // bytes into memory — safe even for a multi-hundred-MB take.
+        const base = (mime || '').split(';')[0];
+        return file.type === base ? file : new Blob([file], { type: mime });
+      },
+      async discard() {
+        try { await send({ type: 'close' }); } catch (e) {}
+        worker.terminate();
+        URL.revokeObjectURL(workerUrl);
+        await deleteRecFile(name);
+      },
+    };
+  } catch (err) {
+    console.warn('Disk recording unavailable, using memory:', err);
+    if (worker) worker.terminate();
+    if (workerUrl) URL.revokeObjectURL(workerUrl);
+    return memorySink(name, mime);
+  }
+}
+
+async function deleteRecFile(name) {
+  try {
+    const dir = await getRecDir(false);
+    if (dir) await dir.removeEntry(name);
+  } catch (e) { /* already gone */ }
+}
+
+async function refreshStorageNote() {
+  const el = document.getElementById('storage-note');
+  if (!el) return;
+  if (!navigator.storage || !navigator.storage.estimate) { el.textContent = ''; return; }
+  try {
+    const { usage = 0, quota = 0 } = await navigator.storage.estimate();
+    const free = Math.max(0, quota - usage);
+    el.textContent = `Clips are stored on the device, not in memory. About ${fmtBytes(free)} of space free.`;
+  } catch (e) { el.textContent = ''; }
+}
+
 // ─── RECORDING ───────────────────────────────────────
+const QUALITY_BITRATE = { high: 8e6, balanced: 4e6, long: 2e6 };
+const QUALITY_NOTE = {
+  high: 'Roughly 60 MB per minute.',
+  balanced: 'Roughly 30 MB per minute. Best trade-off for long takes.',
+  long: 'Roughly 15 MB per minute. Use for takes over 15 minutes.',
+};
+
+function updateQuality(v) {
+  state.quality = v;
+  const note = document.getElementById('quality-note');
+  if (note) note.textContent = QUALITY_NOTE[v] || '';
+}
+
 document.getElementById('record-btn').addEventListener('click', () => {
   if (state.isRecording) {
     stopRecording();
@@ -851,17 +1130,31 @@ document.getElementById('record-btn').addEventListener('click', () => {
   }
 });
 
-function startCountdown() {
+// Previously every record press tore down and re-acquired the whole camera
+// stream, which cost several hundred ms and dropped frames at the top of the
+// take. Now the stream is only touched when it actually needs to change.
+async function prepareStreamForRecording() {
   const angle = screen.orientation ? screen.orientation.angle : 0;
   const isLandscape = (angle === 90 || angle === 270);
 
-  // Only override resolution for landscape (16:9).
-  // Portrait uses whatever the sensor naturally delivers — it works correctly as-is.
-  const reinit = isLandscape
-    ? initCamera(1280, 720)
-    : initCamera();
+  if (!state.stream || !state.stream.active) { await initCamera(isLandscape ? 1280 : undefined, isLandscape ? 720 : undefined); return; }
 
-  reinit.then(() => {
+  const track = state.stream.getVideoTracks()[0];
+  if (!track || track.readyState !== 'live') { await initCamera(); return; }
+
+  if (!isLandscape) return; // portrait uses the sensor's natural output
+
+  const s = track.getSettings();
+  if (s.width && s.width >= 1200 && s.width >= s.height) return; // already HD landscape
+  try {
+    await track.applyConstraints({ width: { ideal: 1280 }, height: { ideal: 720 } });
+  } catch (e) {
+    await initCamera(1280, 720);
+  }
+}
+
+function startCountdown() {
+  prepareStreamForRecording().catch((e) => console.warn('Stream prep failed:', e)).then(() => {
     let n = state.countdownVal;
     if (n === 0) { startRecording(); return; }
     const overlay = document.getElementById('countdown-overlay');
@@ -888,86 +1181,174 @@ function startCountdown() {
   });
 }
 
+async function requestWakeLock() {
+  try {
+    if (navigator.wakeLock) state.wakeLock = await navigator.wakeLock.request('screen');
+  } catch (e) { /* not fatal */ }
+}
+function releaseWakeLock() {
+  try { if (state.wakeLock) state.wakeLock.release(); } catch (e) {}
+  state.wakeLock = null;
+}
+
 function startRecording() {
   if (!state.stream) return;
-  state.recordedChunks = [];
   rewindScroll();
 
   // Don't specify mimeType — let iOS Safari choose its native format.
   // Forcing video/mp4 can cause keyframe issues on some devices.
-  // iOS will use its preferred codec automatically and produce a valid MP4.
+  // A bitrate cap is safe to request though, and it is the single biggest
+  // lever on how much data a long take produces.
+  const opts = {
+    videoBitsPerSecond: QUALITY_BITRATE[state.quality] || QUALITY_BITRATE.balanced,
+    audioBitsPerSecond: 128000,
+  };
   try {
-    state.mediaRecorder = new MediaRecorder(state.stream);
-  } catch(e) {
-    console.error('MediaRecorder init failed:', e);
-    return;
+    state.mediaRecorder = new MediaRecorder(state.stream, opts);
+  } catch (e) {
+    try {
+      state.mediaRecorder = new MediaRecorder(state.stream);
+    } catch (e2) {
+      console.error('MediaRecorder init failed:', e2);
+      toast('This browser cannot record video.');
+      return;
+    }
   }
 
-  state.mediaRecorder.ondataavailable = e => {
-    if (e.data && e.data.size > 0) state.recordedChunks.push(e.data);
+  const recorder = state.mediaRecorder;
+  recorder.start();
+
+  // Per-take context, kept in a closure so a fast stop/start cannot cross the
+  // wires between two takes.
+  const take = { mime: null, name: null, sink: null, ready: null, pending: [] };
+  state.sink = null;
+
+  // The file name has to carry the right extension, and `recorder.mimeType` is
+  // not reliably populated until data starts flowing — so the sink is opened on
+  // the first chunk, whose own type is authoritative.
+  function ensureSink(sampleType) {
+    if (take.ready) return take.ready;
+    take.mime = sampleType || recorder.mimeType || 'video/mp4';
+    take.name = `take-${Date.now()}.${extForMime(take.mime)}`;
+    take.ready = createSink(take.name, take.mime).then((s) => {
+      take.sink = s;
+      state.sink = s;
+      if (take.pending.length) take.pending.splice(0).forEach((b) => s.write(b));
+      if (s.kind === 'memory') toast('Device storage unavailable — keep this take short.', 4000);
+      return s;
+    });
+    return take.ready;
+  }
+
+  // Each chunk is handed straight to the sink and then dropped, so nothing
+  // accumulates in JS memory for the length of the take.
+  recorder.ondataavailable = (e) => {
+    if (!e.data || !e.data.size) return;
+    ensureSink(e.data.type);
+    if (take.sink) take.sink.write(e.data);
+    else take.pending.push(e.data);
   };
-  state.mediaRecorder.onstop = saveRecording;
+  recorder.onstop = () => finalizeRecording(take, ensureSink());
 
-  // Start with no timeslice — avoids encoding spikes that cause frame drops.
-  // Instead we manually flush the buffer every 10s with requestData().
-  // This prevents iOS Safari's ~20s buffer ceiling from freezing the recording
-  // while keeping the encoder running uninterrupted between flushes.
-  state.mediaRecorder.start();
-
+  // No timeslice — flushing manually with requestData() avoids the encoder
+  // restarts that dropped frames on iOS. Flushing every 3s keeps the amount of
+  // un-written video in RAM to a couple of megabytes.
   state.flushInterval = setInterval(() => {
     if (state.mediaRecorder && state.mediaRecorder.state === 'recording') {
       state.mediaRecorder.requestData();
     }
-  }, 5000);
+  }, 3000);
 
   state.isRecording = true;
   state.recStartTime = Date.now();
+  requestWakeLock();
 
   document.getElementById('record-btn').classList.add('recording');
   document.getElementById('rec-timer').classList.add('active');
 
-  const MAX_RECORD_SECONDS = null; // No hard limit — see recording tips in README
-
+  const timeEl = document.getElementById('rec-time-display');
+  const sizeEl = document.getElementById('rec-size');
+  let lastClock = '';
   state.recTimerInterval = setInterval(() => {
     const elapsed = Math.floor((Date.now() - state.recStartTime) / 1000);
-    const m = String(Math.floor(elapsed / 60)).padStart(2,'0');
-    const s = String(elapsed % 60).padStart(2,'0');
-    document.getElementById('rec-time-display').textContent = `${m}:${s}`;
+    const m = String(Math.floor(elapsed / 60)).padStart(2, '0');
+    const s = String(elapsed % 60).padStart(2, '0');
+    const clock = `${m}:${s}`;
+    if (clock !== lastClock) { timeEl.textContent = clock; lastClock = clock; }
+    if (state.sink && state.sink.bytes) sizeEl.textContent = '· ' + fmtBytes(state.sink.bytes);
   }, 500);
 
   startScroll();
 }
 
-
-
 function stopRecording() {
   if (!state.mediaRecorder || !state.isRecording) return;
-  clearInterval(state.flushInterval);
-  state.mediaRecorder.requestData();
-  setTimeout(() => {
-    state.mediaRecorder.stop();
-  }, 150);
   state.isRecording = false;
+  clearInterval(state.flushInterval);
+  clearInterval(state.recTimerInterval);
   document.getElementById('record-btn').classList.remove('recording');
   document.getElementById('rec-timer').classList.remove('active');
-  clearInterval(state.recTimerInterval);
+  document.getElementById('rec-size').textContent = '';
   pauseScroll();
+  releaseWakeLock();
+
+  try { state.mediaRecorder.requestData(); } catch (e) {}
+  setTimeout(() => {
+    try { state.mediaRecorder.stop(); } catch (e) { console.warn(e); }
+  }, 150);
 }
 
-function saveRecording() {
-  // Small delay to ensure all ondataavailable callbacks have fired
-  setTimeout(() => {
-    const mimeType = state.mediaRecorder.mimeType || 'video/mp4';
-    const ext = mimeType.includes('webm') ? 'webm' : 'mp4';
-    const blob = new Blob(state.recordedChunks, { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const ts = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-    state.recordings.push({ url, ts, ext, blob });
-    renderRecordings();
-    openPanel('camera');
-    switchTab('camera');
+// If the app is backgrounded mid-take iOS suspends the capture and the take is
+// finished either way — stopping here saves what was recorded instead of
+// losing all of it.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && state.isRecording) stopRecording();
+});
+
+async function finalizeRecording(take, sinkReady) {
+  let sink;
+  try { sink = await sinkReady; } catch (e) { sink = null; }
+  if (!sink) { toast('Recording could not be saved.'); return; }
+
+  if (take.pending.length) take.pending.splice(0).forEach((b) => sink.write(b));
+  state.sink = null;
+
+  let blob;
+  try {
+    blob = await sink.finish();
+  } catch (e) {
+    console.error('Finalize failed:', e);
+    toast('Recording could not be finalized.');
+    return;
+  }
+
+  if (!blob || !blob.size) {
+    toast('Nothing was recorded.');
+    await sink.discard().catch(() => {});
+    return;
+  }
+
+  state.recordings.unshift({
+    url: URL.createObjectURL(blob),
+    ts: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    ext: extForMime(take.mime || blob.type),
+    size: blob.size,
+    name: sink.kind === 'disk' ? sink.name : null,
+  });
+  renderRecordings();
+  refreshStorageNote();
+  openPanel('camera');
+  switchTab('camera');
+
+  // Re-attach rather than re-acquire the camera — a full getUserMedia round
+  // trip after every take was slow and caused visible stalls.
+  const vid = document.getElementById('camera-video');
+  if (state.stream && state.stream.active) {
+    if (vid.srcObject !== state.stream) vid.srcObject = state.stream;
+    if (vid.paused) vid.play().catch(() => {});
+  } else {
     initCamera();
-  }, 300);
+  }
 }
 
 function downloadClip(index) {
@@ -984,6 +1365,18 @@ function downloadClip(index) {
   setTimeout(() => document.body.removeChild(a), 200);
 }
 
+async function deleteClip(index) {
+  const r = state.recordings[index];
+  if (!r) return;
+  URL.revokeObjectURL(r.url);
+  if (r.name) await deleteRecFile(r.name);
+  state.recordings.splice(index, 1);
+  renderRecordings();
+  refreshStorageNote();
+}
+
+// Previews use preload="none" so a list of clips does not spin up a video
+// decoder per item — that alone could push the page over its memory budget.
 function renderRecordings() {
   const list = document.getElementById('recordings-list');
   if (state.recordings.length === 0) {
@@ -992,48 +1385,209 @@ function renderRecordings() {
   }
   list.innerHTML = state.recordings.map((r, i) => `
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px;">
-      <video src="${r.url}" controls playsinline style="width:100%;border-radius:6px;max-height:120px;background:#000;"></video>
-      <div style="display:flex;align-items:center;justify-content:space-between;">
-        <span style="font-size:11px;color:var(--text-dim);">Clip ${i+1} · ${r.ts}</span>
-        <button onclick="downloadClip(${i})" style="color:var(--accent);font-size:11px;background:none;border:1px solid var(--accent);padding:4px 10px;border-radius:6px;cursor:pointer;font-family:'DM Mono',monospace;">Save</button>
+      <video src="${r.url}" controls playsinline preload="none" style="width:100%;border-radius:6px;max-height:120px;background:#000;"></video>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+        <span style="font-size:11px;color:var(--text-dim);">${r.recovered ? 'Recovered' : 'Clip'} · ${r.ts}${r.size ? ' · ' + fmtBytes(r.size) : ''}</span>
+        <span style="display:flex;gap:6px;">
+          <button onclick="downloadClip(${i})" style="color:var(--accent);font-size:11px;background:none;border:1px solid var(--accent);padding:4px 10px;border-radius:6px;cursor:pointer;font-family:'DM Mono',monospace;">Save</button>
+          <button onclick="deleteClip(${i})" style="color:var(--text-dim);font-size:11px;background:none;border:1px solid var(--border);padding:4px 10px;border-radius:6px;cursor:pointer;font-family:'DM Mono',monospace;">Delete</button>
+        </span>
       </div>
     </div>
   `).join('');
 }
 
+// Because takes are written to disk as they record, a take that was lost to a
+// crash or a force-quit is still on the device on the next launch.
+async function recoverPreviousTakes() {
+  let dir;
+  try { dir = await getRecDir(false); } catch (e) { return; }
+  if (!dir || !dir.values) return;
+  const found = [];
+  const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+  try {
+    for await (const entry of dir.values()) {
+      if (entry.kind !== 'file') continue;
+      const stamp = Number((entry.name.match(/take-(\d+)\./) || [])[1]);
+      // Housekeeping: takes left on the device for a week are cleared so
+      // storage cannot creep upward forever.
+      if (stamp && Date.now() - stamp > MAX_AGE_MS) { await deleteRecFile(entry.name); continue; }
+      let file;
+      try { file = await entry.getFile(); } catch (e) { continue; }
+      if (file.size < 200000) { await deleteRecFile(entry.name); continue; } // aborted/empty
+      found.push({ name: entry.name, file });
+    }
+  } catch (e) { return; }
+  if (!found.length) return;
+
+  found.sort((a, b) => a.name.localeCompare(b.name));
+  for (const { name, file } of found) {
+    const stamp = Number((name.match(/take-(\d+)\./) || [])[1]);
+    const ext = name.split('.').pop() || 'mp4';
+    state.recordings.push({
+      url: URL.createObjectURL(file),
+      ts: stamp ? new Date(stamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'earlier session',
+      ext, size: file.size, name, recovered: true,
+    });
+  }
+  renderRecordings();
+  toast(`${found.length} unsaved take${found.length > 1 ? 's' : ''} recovered — see the Camera panel.`, 5000);
+}
+
 // ─── PROMPTER SCROLLING ──────────────────────────────
+// Driven by requestAnimationFrame and a GPU transform rather than a 30ms
+// setInterval writing scrollTop. The old loop ran off-cadence from the display
+// (so it visibly stuttered) and forced a layout + a CSS height transition on
+// the progress bar on every tick. This version moves one composited layer and
+// is frame-rate independent, so speed 5 reads the same on a 60Hz and a 120Hz
+// screen and does not slow down when the encoder is busy.
+const PX_PER_SPEED_UNIT = 200 / 30; // matches the previous 0.2px per 30ms tick
+const FLING_DECAY = 0.94;           // per 60Hz frame
+
+let lastRenderedPos = -1;
+let lastRenderedPct = -1;
+
+function clampScroll(p) {
+  return p < 0 ? 0 : (p > state.maxScroll ? state.maxScroll : p);
+}
+
+function measureScroll() {
+  state.maxScroll = Math.max(0, textEl.offsetHeight - scrollEl.clientHeight);
+  state.scrollPos = clampScroll(state.scrollPos);
+  renderScroll();
+  // New script or a taller box can make a stopped auto-scroll runnable again.
+  if (state.isScrolling && state.scrollPos < state.maxScroll) ensureLoop();
+}
+
+function renderScroll() {
+  if (state.scrollPos !== lastRenderedPos) {
+    trackEl.style.transform = `translate3d(0, ${-state.scrollPos}px, 0)`;
+    lastRenderedPos = state.scrollPos;
+  }
+  const pct = state.maxScroll > 0 ? state.scrollPos / state.maxScroll : 0;
+  if (Math.abs(pct - lastRenderedPct) > 0.002) {
+    progressEl.style.transform = `scaleY(${pct})`;
+    lastRenderedPct = pct;
+  }
+}
+
+function ensureLoop() {
+  if (state.rafId === null) {
+    state.lastFrameT = 0;
+    state.rafId = requestAnimationFrame(frame);
+  }
+}
+
+function frame(now) {
+  const dt = state.lastFrameT ? Math.min(0.1, (now - state.lastFrameT) / 1000) : 0;
+  state.lastFrameT = now;
+
+  let active = false;
+
+  if (state.dragging) {
+    active = true; // position is set by the pointer handler; keep rendering
+  } else {
+    if (state.isScrolling && state.scrollPos < state.maxScroll) {
+      state.scrollPos += state.speed * PX_PER_SPEED_UNIT * dt;
+      active = true;
+    }
+    if (state.fling !== 0) {
+      state.scrollPos += state.fling * dt;
+      state.fling *= Math.pow(FLING_DECAY, dt * 60);
+      if (Math.abs(state.fling) < 10) state.fling = 0;
+      active = true;
+    }
+    const clamped = clampScroll(state.scrollPos);
+    if (clamped !== state.scrollPos) { state.scrollPos = clamped; state.fling = 0; }
+  }
+
+  renderScroll();
+  state.rafId = active ? requestAnimationFrame(frame) : null;
+}
+
 function startScroll() {
   if (state.isScrolling) return;
   state.isScrolling = true;
   document.getElementById('icon-play').style.display = 'none';
   document.getElementById('icon-pause').style.display = '';
-
-  const container = document.getElementById('prompter-scroll-container');
-  const text = document.getElementById('prompter-text');
-  const progress = document.getElementById('scroll-progress');
-
-  state.scrollInterval = setInterval(() => {
-    const maxScroll = text.scrollHeight - container.clientHeight;
-    if (maxScroll <= 0) return;
-    state.scrollPos = Math.min(state.scrollPos + state.speed * 0.2, maxScroll);
-    container.scrollTop = state.scrollPos;
-    const pct = (state.scrollPos / maxScroll) * 100;
-    progress.style.height = pct + '%';
-  }, 30);
+  measureScroll();
+  ensureLoop();
 }
 
 function pauseScroll() {
   state.isScrolling = false;
-  clearInterval(state.scrollInterval);
+  state.fling = 0;
   document.getElementById('icon-play').style.display = '';
   document.getElementById('icon-pause').style.display = 'none';
 }
 
 function rewindScroll() {
   state.scrollPos = 0;
-  document.getElementById('prompter-scroll-container').scrollTop = 0;
-  document.getElementById('scroll-progress').style.height = '0%';
+  state.fling = 0;
+  measureScroll();
 }
+
+// ─── SWIPE / DRAG / WHEEL ────────────────────────────
+// Dragging the script moves it with your finger. Auto-scroll is suspended for
+// the duration of the drag and picks up again from the new position on release,
+// so you can nudge the script mid-take without stopping the roll.
+let dragPointerId = null;
+let dragStartY = 0, dragStartPos = 0;
+let sampleY = 0, sampleT = 0, dragVelocity = 0;
+
+scrollEl.addEventListener('pointerdown', (e) => {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  dragPointerId = e.pointerId;
+  try { scrollEl.setPointerCapture(e.pointerId); } catch (err) {}
+  measureScroll();
+  state.dragging = true;
+  state.fling = 0;
+  dragStartY = e.clientY;
+  dragStartPos = state.scrollPos;
+  sampleY = e.clientY;
+  sampleT = e.timeStamp;
+  dragVelocity = 0;
+  scrollEl.classList.add('dragging');
+  ensureLoop();
+});
+
+scrollEl.addEventListener('pointermove', (e) => {
+  if (!state.dragging || e.pointerId !== dragPointerId) return;
+  e.preventDefault();
+  // Swipe up => text moves up => later lines revealed, same as native scrolling.
+  state.scrollPos = clampScroll(dragStartPos - (e.clientY - dragStartY));
+  const dt = e.timeStamp - sampleT;
+  if (dt > 8) {
+    dragVelocity = -(e.clientY - sampleY) / (dt / 1000);
+    sampleY = e.clientY;
+    sampleT = e.timeStamp;
+  }
+  // No render here — the rAF loop is running and coalesces to the display.
+});
+
+function endDrag(e) {
+  if (!state.dragging) return;
+  if (e && e.pointerId !== dragPointerId) return;
+  state.dragging = false;
+  dragPointerId = null;
+  scrollEl.classList.remove('dragging');
+  if (e && (e.timeStamp - sampleT) < 120 && Math.abs(dragVelocity) > 60) {
+    state.fling = Math.max(-4000, Math.min(4000, dragVelocity));
+  }
+  ensureLoop();
+}
+
+scrollEl.addEventListener('pointerup', endDrag);
+scrollEl.addEventListener('pointercancel', endDrag);
+scrollEl.addEventListener('lostpointercapture', endDrag);
+
+scrollEl.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  measureScroll();
+  state.fling = 0;
+  state.scrollPos = clampScroll(state.scrollPos + e.deltaY);
+  ensureLoop();
+}, { passive: false });
 
 document.getElementById('btn-play-pause').addEventListener('click', () => {
   state.isScrolling ? pauseScroll() : startScroll();
@@ -1053,7 +1607,7 @@ document.getElementById('btn-speed-up').addEventListener('click', () => {
 // ─── SCRIPT ──────────────────────────────────────────
 function applyScript() {
   const txt = document.getElementById('script-textarea').value;
-  document.getElementById('prompter-text').textContent = txt;
+  textEl.textContent = txt;
   rewindScroll();
   closePanel();
   // Re-attach stream after panel close to prevent black screen on iOS
@@ -1068,7 +1622,7 @@ function applyScript() {
 
 function clearScript() {
   document.getElementById('script-textarea').value = '';
-  document.getElementById('prompter-text').textContent = '';
+  textEl.textContent = '';
   rewindScroll();
 }
 
@@ -1104,13 +1658,17 @@ function applyPosition() {
   overlay.style.right = right;
   overlay.style.width = w + '%';
   overlay.style.height = h + '%';
+
+  // Box size changed => the scrollable distance changed.
+  measureScroll();
 }
 
 // ─── DISPLAY CONTROLS ────────────────────────────────
 function updateFontSize(v) {
   state.fontSize = +v;
   document.getElementById('val-font-size').textContent = v;
-  document.getElementById('prompter-text').style.fontSize = v + 'px';
+  textEl.style.fontSize = v + 'px';
+  measureScroll();
 }
 
 function updateBoxWidth(v) {
@@ -1147,11 +1705,10 @@ function rotateText(deg) {
 }
 
 function applyTextTransform() {
-  const el = document.getElementById('prompter-text');
   const transforms = [];
   if (state.textRotation) transforms.push(`rotate(${state.textRotation}deg)`);
   if (state.mirror) transforms.push('scaleX(-1)');
-  el.style.transform = transforms.length ? transforms.join(' ') : '';
+  textEl.style.transform = transforms.length ? transforms.join(' ') : '';
 }
 
 // ─── ORIENTATION ─────────────────────────────────────
@@ -1222,16 +1779,43 @@ function applyDefaultPosition() {
   applyPosition();
 }
 
-screen.orientation && screen.orientation.addEventListener('change', () => {
-  setTimeout(applyDefaultPosition, 150);
-});
-window.addEventListener('resize', () => setTimeout(applyDefaultPosition, 150));
+// `resize` fires constantly on iOS — the address bar collapsing, the keyboard
+// opening, the panel animating. Re-running applyDefaultPosition on each of
+// those wiped whatever box size and position the user had chosen. Only a real
+// portrait <-> landscape change should reset the layout; everything else just
+// re-measures.
+let lastOrientLandscape = (() => {
+  const a = screen.orientation ? screen.orientation.angle : 0;
+  return a === 90 || a === 270;
+})();
+
+let viewportTimer = null;
+function onViewportChange() {
+  clearTimeout(viewportTimer);
+  viewportTimer = setTimeout(() => {
+    const a = screen.orientation ? screen.orientation.angle : 0;
+    const isLandscape = (a === 90 || a === 270);
+    updateOrientPill();
+    if (isLandscape !== lastOrientLandscape) {
+      lastOrientLandscape = isLandscape;
+      applyDefaultPosition();
+    } else {
+      measureScroll();
+    }
+  }, 150);
+}
+
+screen.orientation && screen.orientation.addEventListener('change', onViewportChange);
+window.addEventListener('resize', onViewportChange);
 
 // ─── INIT ─────────────────────────────────────────────
 (async function init() {
   document.getElementById('prompter-overlay').style.backgroundColor = `rgba(30,30,30,0.75)`;
-  document.getElementById('prompter-text').style.fontSize = '24px';
+  textEl.style.fontSize = '24px';
+  updateQuality(state.quality);
   applyDefaultPosition();
+  recoverPreviousTakes();
+  refreshStorageNote();
   await initCamera();
 })();
 </script>
