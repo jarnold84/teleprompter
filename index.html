@@ -525,27 +525,36 @@
     will-change: transform;
   }
 
-  /* Toast */
+  /* Toast — fixed and above the side panel, since Save is tapped from inside
+     the panel and a toast underneath it would never be seen. */
   #toast {
-    position: absolute;
+    position: fixed;
     left: 50%;
-    bottom: 66px;
+    bottom: 140px;
     transform: translateX(-50%);
     max-width: 82%;
-    background: rgba(0,0,0,0.82);
+    background: rgba(0,0,0,0.88);
     border: 1px solid var(--border);
     color: var(--text);
-    padding: 8px 14px;
+    padding: 9px 15px;
     border-radius: 20px;
     font-size: 11px;
     line-height: 1.5;
     text-align: center;
-    z-index: 60;
+    z-index: 200;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.2s ease;
   }
   #toast.show { opacity: 1; }
+  #toast.success { border-color: rgba(110,200,138,0.55); }
+  #toast.success::before {
+    content: '✓';
+    color: var(--green);
+    margin-right: 7px;
+    font-weight: 500;
+  }
+  #toast.error { border-color: rgba(200,110,110,0.55); }
 
   #rec-size { color: var(--text-dim); }
 </style>
@@ -835,8 +844,10 @@ const progressEl = document.getElementById('scroll-progress');
 const toastEl    = document.getElementById('toast');
 
 let toastTimer = null;
-function toast(msg, ms = 2600) {
+function toast(msg, ms = 2600, kind = '') {
   toastEl.textContent = msg;
+  toastEl.className = kind;          // 'success' | 'error' | ''
+  void toastEl.offsetWidth;          // restart the fade if a toast is already up
   toastEl.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), ms);
@@ -844,7 +855,9 @@ function toast(msg, ms = 2600) {
 
 function fmtBytes(n) {
   if (!n) return '';
-  return n >= 1e9 ? (n / 1e9).toFixed(2) + ' GB' : Math.round(n / 1e6) + ' MB';
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + ' GB';
+  if (n >= 1e6) return Math.round(n / 1e6) + ' MB';
+  return Math.max(1, Math.round(n / 1e3)) + ' KB';
 }
 
 // ─── CAMERA ──────────────────────────────────────────
@@ -1351,18 +1364,34 @@ async function finalizeRecording(take, sinkReady) {
   }
 }
 
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
 function downloadClip(index) {
   const r = state.recordings[index];
   if (!r) return;
-  // iOS Safari requires opening blob URL directly in a new tab
-  // rather than using the download attribute
-  const a = document.createElement('a');
-  a.href = r.url;
-  a.download = `clip-${index + 1}.${r.ext}`;
-  a.target = '_blank';
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => document.body.removeChild(a), 200);
+  try {
+    // iOS Safari requires opening blob URL directly in a new tab
+    // rather than using the download attribute
+    const a = document.createElement('a');
+    a.href = r.url;
+    a.download = `clip-${index + 1}.${r.ext}`;
+    a.target = '_blank';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => document.body.removeChild(a), 200);
+  } catch (e) {
+    console.error('Save failed:', e);
+    toast('Could not save that clip. Try again.', 4000, 'error');
+    return;
+  }
+  toast(
+    IS_IOS
+      ? `Saved${r.size ? ' (' + fmtBytes(r.size) + ')' : ''} — open the Files app to add it to your Camera Roll.`
+      : `Saved${r.size ? ' (' + fmtBytes(r.size) + ')' : ''} to your Downloads folder.`,
+    4500,
+    'success'
+  );
 }
 
 async function deleteClip(index) {
@@ -1386,12 +1415,10 @@ function renderRecordings() {
   list.innerHTML = state.recordings.map((r, i) => `
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px;">
       <video src="${r.url}" controls playsinline preload="none" style="width:100%;border-radius:6px;max-height:120px;background:#000;"></video>
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-        <span style="font-size:11px;color:var(--text-dim);">${r.recovered ? 'Recovered' : 'Clip'} · ${r.ts}${r.size ? ' · ' + fmtBytes(r.size) : ''}</span>
-        <span style="display:flex;gap:6px;">
-          <button onclick="downloadClip(${i})" style="color:var(--accent);font-size:11px;background:none;border:1px solid var(--accent);padding:4px 10px;border-radius:6px;cursor:pointer;font-family:'DM Mono',monospace;">Save</button>
-          <button onclick="deleteClip(${i})" style="color:var(--text-dim);font-size:11px;background:none;border:1px solid var(--border);padding:4px 10px;border-radius:6px;cursor:pointer;font-family:'DM Mono',monospace;">Delete</button>
-        </span>
+      <span style="font-size:11px;color:var(--text-dim);">${r.recovered ? 'Recovered' : 'Clip'} · ${r.ts}${r.size ? ' · ' + fmtBytes(r.size) : ''}</span>
+      <div style="display:flex;gap:6px;">
+        <button onclick="downloadClip(${i})" style="flex:1;color:var(--accent);font-size:11px;background:none;border:1px solid var(--accent);padding:6px 10px;border-radius:6px;cursor:pointer;font-family:'DM Mono',monospace;">Save</button>
+        <button onclick="deleteClip(${i})" style="flex:1;color:var(--text-dim);font-size:11px;background:none;border:1px solid var(--border);padding:6px 10px;border-radius:6px;cursor:pointer;font-family:'DM Mono',monospace;">Delete</button>
       </div>
     </div>
   `).join('');
