@@ -489,7 +489,14 @@
     padding: 24px;
   }
   #cam-error.show { display: flex; }
-  #cam-error p { color: var(--text-dim); font-size: 13px; line-height: 1.6; }
+  #cam-error p { color: var(--text-dim); font-size: 13px; line-height: 1.6; max-width: 420px; }
+  #cam-error-diag {
+    font-size: 10px !important;
+    color: #5a5a5a !important;
+    line-height: 1.6;
+    margin-top: 4px;
+    word-break: break-word;
+  }
 
   /* Status pills */
   #status-bar {
@@ -566,8 +573,10 @@
 
     <div id="cam-error">
       <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M23 7 16 12l7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-      <p>Camera access is required.<br>Please allow camera permissions in Safari Settings, then reload.</p>
-      <button class="action-btn primary" onclick="initCamera()">Try Again</button>
+      <p id="cam-error-title" style="color:var(--text);font-size:14px;">Camera unavailable</p>
+      <p id="cam-error-msg">Camera access is required.</p>
+      <button class="action-btn primary" style="max-width:220px;" onclick="initCamera()">Try Again</button>
+      <p id="cam-error-diag"></p>
     </div>
 
     <div id="prompter-overlay">
@@ -861,8 +870,73 @@ function fmtBytes(n) {
 }
 
 // ─── CAMERA ──────────────────────────────────────────
+// Modern iPadOS reports itself as a Mac, hence the touch-point check.
+const IS_IPAD = /iPad/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1 && !/iPhone/.test(navigator.userAgent));
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || IS_IPAD;
+
+// iPadOS refuses camera access whenever Safari is sharing the screen with
+// another app. The window being narrower than the physical screen's short
+// edge is a reliable sign we are not running full screen.
+function looksLikeSplitView() {
+  if (!IS_IPAD || !window.screen) return false;
+  const shortEdge = Math.min(screen.width, screen.height);
+  return window.innerWidth < shortEdge - 20;
+}
+
+// One generic "allow camera permissions" message for every possible failure
+// made problems impossible to tell apart. Name the actual cause instead.
+function showCameraError(err) {
+  const name = (err && (err.name || err.constructor && err.constructor.name)) || 'Error';
+  const titleEl = document.getElementById('cam-error-title');
+  const msgEl = document.getElementById('cam-error-msg');
+  const diagEl = document.getElementById('cam-error-diag');
+  let title = 'Camera unavailable';
+  let msg;
+
+  if (!window.isSecureContext || !navigator.mediaDevices) {
+    title = 'Insecure connection';
+    msg = 'The camera only works over a secure (https) connection. Check the address bar — if it starts with http:// or is an IP address, open the https:// Scrollcast link instead.';
+  } else if (looksLikeSplitView()) {
+    title = 'Split View is blocking the camera';
+    msg = 'iPad turns the camera off while Safari shares the screen with another app. Make Scrollcast full screen (drag the divider all the way over, or close Slide Over), then tap Try Again.';
+  } else if (name === 'NotAllowedError' || name === 'SecurityError') {
+    msg = 'Camera access was blocked for this site. Tap the "aA" or page-settings icon in the address bar → Website Settings → Camera → Allow. Also check Settings → Apps → Safari → Camera. Then tap Try Again.';
+  } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    msg = 'No matching camera was found on this device. Try the Flip button, or pick a different camera in the Camera panel.';
+  } else if (name === 'NotReadableError' || name === 'AbortError') {
+    msg = 'Another app is using the camera. Close FaceTime, Camera, Zoom or any other app that might have it open, then tap Try Again.';
+  } else {
+    msg = 'The camera could not be started on this device.';
+  }
+
+  titleEl.textContent = title;
+  msgEl.textContent = msg;
+  diagEl.textContent = cameraDiagnostics(name, err);
+  document.getElementById('cam-error').classList.add('show');
+}
+
+// Shown small under the message so a failure on a device with no debugger
+// attached can still be reported accurately.
+function cameraDiagnostics(name, err) {
+  const bits = [];
+  bits.push(name + (err && err.message ? ': ' + err.message : ''));
+  bits.push(location.protocol.replace(':', '') + (window.isSecureContext ? ' (secure)' : ' (NOT secure)'));
+  bits.push('window ' + window.innerWidth + '×' + window.innerHeight +
+            (window.screen ? ' / screen ' + screen.width + '×' + screen.height : ''));
+  bits.push(IS_IPAD ? 'iPad' : (IS_IOS ? 'iPhone' : 'other'));
+  if (navigator.standalone) bits.push('home screen app');
+  if (!navigator.mediaDevices) bits.push('mediaDevices missing');
+  return bits.join(' · ');
+}
+
 async function initCamera(widthOverride, heightOverride) {
   document.getElementById('cam-error').classList.remove('show');
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showCameraError({ name: 'UnsupportedError', message: 'navigator.mediaDevices unavailable' });
+    return;
+  }
   const videoConstraints = {
     facingMode: state.currentFacing,
     ...(state.selectedCameraId ? { deviceId: { exact: state.selectedCameraId } } : {}),
@@ -886,7 +960,7 @@ async function initCamera(widthOverride, heightOverride) {
     updateCamPill();
   } catch (e) {
     console.error(e);
-    document.getElementById('cam-error').classList.add('show');
+    showCameraError(e);
   }
 }
 
@@ -1363,9 +1437,6 @@ async function finalizeRecording(take, sinkReady) {
     initCamera();
   }
 }
-
-const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
-  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 function downloadClip(index) {
   const r = state.recordings[index];
